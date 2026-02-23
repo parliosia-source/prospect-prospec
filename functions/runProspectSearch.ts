@@ -236,25 +236,74 @@ Deno.serve(async (req) => {
     const kbDomainSet = new Set(kbAll.map(e => (e.domain || "").toLowerCase()));
     console.log(`[KB] loaded=${kbAll.length}`);
 
-    // Filter: region
+    // ── V3 helpers ──────────────────────────────────────────────────────────
+    function parseArr(v) {
+      if (Array.isArray(v)) return v;
+      if (!v || String(v).trim() === "" || String(v).toLowerCase() === "nan") return [];
+      const s = String(v).trim();
+      if (s.startsWith("[")) { try { return JSON.parse(s); } catch(_) {} }
+      return s.split(",").map(x => x.trim()).filter(Boolean);
+    }
+
+    // Geo: determine required geoScope values from campaign locationQuery
+    function resolveRequiredGeoScopes() {
+      if (isMTL) return ["MTL_CMM"];
+      const locNormInner = normText(locQuery);
+      if (/\b(qc|qu[eé]bec)\b/.test(locNormInner)) return ["MTL_CMM", "QC_OTHER"];
+      // Fallback: all Canada
+      return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
+    }
+    const requiredGeoScopes = resolveRequiredGeoScopes();
+
+    // Filter: region — V3 geoScope first, fallback to hqRegion/hqProvince
     const kbRegionFiltered = kbAll.filter(e => {
       if (!e.domain || !e.website || !e.name) return false;
+      // V3 path: use geoScope if present
+      if (e.geoScope && e.geoScope !== "UNKNOWN") {
+        return requiredGeoScopes.includes(e.geoScope);
+      }
+      // Legacy fallback: hqRegion
       if (isMTL) return ["MTL","GM"].includes(e.hqRegion);
       if (targetProvince) return e.hqProvince === targetProvince || ["MTL","GM","QC_OTHER"].includes(e.hqRegion);
       return true;
     });
-    console.log(`[KB] afterRegion=${kbRegionFiltered.length}`);
+    console.log(`[KB] afterRegion=${kbRegionFiltered.length} geoScopes=${requiredGeoScopes.join(",")}`);
 
-    // Filter: sector
+    // Filter: sector — check industrySectors (primary), themes, primaryTheme, industryLabel
     const kbSectorFiltered = kbRegionFiltered.filter(e => {
       if (requiredSectors.length === 0) return true;
-      const eSectors = Array.isArray(e.industrySectors) ? e.industrySectors : [];
-      return eSectors.some(s => requiredSectors.includes(s));
+      const sectors = parseArr(e.industrySectors);
+      const themes = parseArr(e.themes);
+      if (sectors.some(s => requiredSectors.includes(s))) return true;
+      if (themes.some(s => requiredSectors.includes(s))) return true;
+      if (requiredSectors.includes(e.primaryTheme)) return true;
+      if (requiredSectors.includes(e.industryLabel)) return true;
+      return false;
     });
     console.log(`[KB] afterSector=${kbSectorFiltered.length}`);
 
-    // Sort by confidenceScore desc
-    kbSectorFiltered.sort((a, b) => (b.confidenceScore || 70) - (a.confidenceScore || 70));
+    // ── V3 Ranking: primaryTheme match + themeConfidence + eventSignals - BACKFILL penalty
+    function rankScore(e) {
+      const signals = parseArr(e.eventSignals);
+      const flags = parseArr(e.qualityFlags);
+      let score = 0;
+      // Boost: primaryTheme matches requested sector
+      if (requiredSectors.length > 0 && requiredSectors.includes(e.primaryTheme)) score += 1000;
+      // themeConfidence (0–1 → 0–100)
+      const tc = typeof e.themeConfidence === "number" ? e.themeConfidence : (parseFloat(e.themeConfidence) || 0.55);
+      score += tc * 100;
+      // eventSignals boost
+      if (signals.length > 0) score += 10;
+      // confidenceScore fallback weight (lower weight)
+      score += (e.confidenceScore || 70) * 0.2;
+      // BACKFILL penalty per requested sector
+      for (const sector of requiredSectors) {
+        if (flags.includes(`THEME_EXPANDED:${sector}:BACKFILL_150`)) { score -= 20; break; }
+      }
+      return score;
+    }
+
+    kbSectorFiltered.sort((a, b) => rankScore(b) - rankScore(a));
 
     for (const kb of kbSectorFiltered) {
       if (prospectCount >= targetCount) { stopReason = "TARGET_REACHED"; break; }
