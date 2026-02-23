@@ -256,12 +256,17 @@ Deno.serve(async (req) => {
 
   let allRows;
   const trimmed = rawText.trimStart();
-  if (trimmed.startsWith("[")) {
-    // JSON array
-    allRows = JSON.parse(trimmed);
-    if (!Array.isArray(allRows)) return Response.json({ error: "JSON must be an array" }, { status: 400 });
+  // Force mode can be set via body param; otherwise auto-detect
+  if (body.format === "json" || (trimmed.startsWith("[") && body.format !== "csv")) {
+    try {
+      allRows = JSON.parse(trimmed);
+      if (!Array.isArray(allRows)) return Response.json({ error: "JSON must be an array" }, { status: 400 });
+    } catch (e) {
+      // Fallback to CSV if JSON parse fails
+      allRows = parseCsv(trimmed);
+    }
   } else {
-    // CSV
+    // CSV (default)
     allRows = parseCsv(trimmed);
   }
 
