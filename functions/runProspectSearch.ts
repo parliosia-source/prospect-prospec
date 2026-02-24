@@ -557,7 +557,7 @@ Deno.serve(async (req) => {
           if (!kbDomainSet.has(domNorm) && norm.score >= 75) {
             try {
               const todayStr = new Date().toISOString().split("T")[0];
-              const created = await base44.asServiceRole.entities.KBEntityV2.create({
+              const created = await base44.asServiceRole.entities.KBEntityV3.create({
                 name: norm.companyName,
                 normalizedName: normText(norm.companyName),
                 domain: domNorm,
