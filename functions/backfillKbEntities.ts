@@ -137,22 +137,23 @@ const SECTOR_SCORING_RULES = {
 
   "Associations & OBNL": {
     strongSignals: [
-      "association","association professionnelle","association sectorielle","federation",
+      "association professionnelle","association sectorielle","association patronale",
       "obnl","npo","organisme sans but lucratif","organisme a but non lucratif","but non lucratif",
-      "fondation","fondation philanthropique","fondation caritative",
-      "organisme de bienfaisance","bienfaisance","charitable","charité",
-      "syndicat","syndicat professionnel","syndicat ouvrier","centrale syndicale","csn","ftq","csd",
-      "ordre professionnel","barreau","chambre","chambre de commerce","chambre d industrie",
+      "fondation philanthropique","fondation caritative","fondation communautaire",
+      "organisme de bienfaisance","bienfaisance","charitable",
+      "syndicat professionnel","syndicat ouvrier","centrale syndicale","csn","ftq","csd",
+      "ordre professionnel","chambre de commerce","chambre d industrie",
       "ong","organisation non gouvernementale","ngo",
-      "communautaire","organisme communautaire","centre communautaire","maison des jeunes","maison de la famille",
-      "benevole","benevolat","volontariat","entraide",
-      "club social","club sportif","ligue","federation sportive",
-      "conseil des arts","organisme culturel","centre culturel","patrimoine",
+      "organisme communautaire","centre communautaire","maison des jeunes","maison de la famille",
+      "federation sportive","federation sectorielle",
+      "conseil des arts","organisme culturel",
     ],
     exclusions: [
       "hopital","clinique medicale","pharmacie",
-      "banque","assurance","fintech",
+      "banque commerciale","assurance","fintech",
       "ville de","gouvernement","municipalite","ministere",
+      "logiciel","software","saas","developpement web",
+      "usine","manufacture","fabrication",
     ],
   },
 
