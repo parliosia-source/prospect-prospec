@@ -323,10 +323,19 @@ Deno.serve(async (req) => {
   const START = Date.now();
   console.log(`[BACKFILL] START dryRun=${dryRun} offset=${offset} limit=${limit} onlyEmptySectors=${onlyEmptySectors}`);
 
-  // Load batch
-  const allEntities = await base44.asServiceRole.entities.KBEntityV2.list('-created_date', limit + offset, 0).catch(() => []);
+  // Load all entities via proper pagination (500 per page)
+  let allEntities = [];
+  let page = 0;
+  while (true) {
+    const chunk = await base44.asServiceRole.entities.KBEntityV2.list('-created_date', 500, page * 500).catch(() => []);
+    if (!chunk || chunk.length === 0) break;
+    allEntities = allEntities.concat(chunk);
+    if (chunk.length < 500) break;
+    page++;
+    if (page >= 20) break; // safety cap at 10k
+  }
   const batch = allEntities.slice(offset, offset + limit);
-  console.log(`[BACKFILL] totalLoaded=${allEntities.length} batchSize=${batch.length}`);
+  console.log(`[BACKFILL] totalInDB=${allEntities.length} offset=${offset} batchSize=${batch.length}`);
 
   let sectorized = 0, geoFixed = 0, skipped = 0, errors = 0;
   let mtlCmmCount = 0;
