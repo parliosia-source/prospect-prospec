@@ -63,7 +63,7 @@ function buildKbRecord(headers, values) {
     const val = values[i] || "";
     if (!key) continue;
 
-    if (["industrySectors", "themes", "keywords", "tags", "synonyms", "sectorSynonymsUsed", "eventSignals", "qualityFlags", "industrySectorsDerivedReasons"].includes(key)) {
+    if (["industrySectors", "themes", "keywords", "tags", "synonyms", "sectorSynonymsUsed", "eventSignals", "qualityFlags"].includes(key)) {
       record[key] = parseArr(val);
     } else if (["themeConfidence", "confidenceScore"].includes(key)) {
       record[key] = parseNumber(val);
@@ -91,7 +91,7 @@ Deno.serve(async (req) => {
   }
 
   const body = await req.json();
-  const { fileUrl, startFrom = 0 } = body;
+  const { fileUrl } = body;
 
   if (!fileUrl) {
     return Response.json({ error: "fileUrl required" }, { status: 400 });
@@ -106,8 +106,7 @@ Deno.serve(async (req) => {
     if (rows.length < 2) throw new Error("CSV must have headers + at least 1 data row");
 
     const headers = rows[0].map(h => h.trim());
-    const allDataRows = rows.slice(1);
-    const dataRows = allDataRows.slice(startFrom);
+    const dataRows = rows.slice(1);
 
     // Load existing domains for dedup
     const existing = await base44.asServiceRole.entities.KBEntityV3.list("-updated_date", 5000).catch(() => []);
@@ -117,56 +116,39 @@ Deno.serve(async (req) => {
     const errors = [];
     const samples = [];
 
-    // Batch insert — small batches with throttling + time guard
-    const BATCH_SIZE = 20;
-    const INTER_RECORD_MS = 100;
-    const INTER_BATCH_MS = 1500;
-    const MAX_RUNTIME_MS = 150 * 1000; // stop safely before 180s timeout
-    const startTime = Date.now();
-    let stoppedEarly = false;
-
-    const STRIP_KEYS = ["id", "created_date", "updated_date", "created_by_id", "created_by", "is_sample"];
-
+    // Batch insert
+    const BATCH_SIZE = 50;
     for (let batchIdx = 0; batchIdx < dataRows.length; batchIdx += BATCH_SIZE) {
-      // Time guard: stop if running out of time
-      if (Date.now() - startTime > MAX_RUNTIME_MS) {
-        stoppedEarly = true;
-        console.log(`[IMPORT] time guard: stopping at row ${startFrom + batchIdx}`);
-        break;
-      }
-
       const batch = dataRows.slice(batchIdx, batchIdx + BATCH_SIZE);
       const records = batch.map(row => buildKbRecord(headers, row)).filter(r => r.name && r.domain);
 
       for (const record of records) {
-        // Remove read-only fields
-        for (const k of STRIP_KEYS) delete record[k];
-
         try {
           const domNorm = (record.domain || "").toLowerCase();
 
           // Check for existing by domain
-          const existingRecs = await base44.asServiceRole.entities.KBEntityV3.filter({ domain: domNorm }).catch(() => []);
+          const existing = await base44.asServiceRole.entities.KBEntityV3.filter({ domain: domNorm }).catch(() => []);
           
-          // Retry logic for rate limits (up to 6 attempts)
+          // Retry logic for rate limits
           let success = false;
-          for (let attempt = 0; attempt < 6 && !success; attempt++) {
+          for (let attempt = 0; attempt < 5 && !success; attempt++) {
             try {
-              if (existingRecs.length > 0) {
-                await base44.asServiceRole.entities.KBEntityV3.update(existingRecs[0].id, record);
+              if (existing.length > 0) {
+                // Update
+                await base44.asServiceRole.entities.KBEntityV3.update(existing[0].id, record);
                 updated++;
               } else {
+                // Create
                 await base44.asServiceRole.entities.KBEntityV3.create(record);
                 created++;
                 existingDomains.add(domNorm);
               }
               success = true;
             } catch (retryErr) {
-              const msg = (retryErr.message || "").toLowerCase();
-              const isRateLimit = retryErr.status === 429 || msg.includes("rate limit");
-              if (!isRateLimit || attempt === 5) throw retryErr;
+              const isRateLimit = retryErr.status === 429 || (retryErr.message || "").toLowerCase().includes("rate limit");
+              if (!isRateLimit || attempt === 4) throw retryErr;
+              // Exponential backoff
               const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
-              console.log(`[RETRY] attempt=${attempt + 1} delay=${Math.round(delay)}ms domain=${domNorm}`);
               await new Promise(r => setTimeout(r, delay));
             }
           }
@@ -174,35 +156,19 @@ Deno.serve(async (req) => {
           if (samples.length < 5) {
             samples.push({ name: record.name, domain: record.domain, industryLabel: record.industryLabel, status: "ok" });
           }
-
-          // Throttle between records
-          await new Promise(r => setTimeout(r, INTER_RECORD_MS));
         } catch (err) {
           skipped++;
-          errors.push(`${record.domain}: ${String(err.message).slice(0, 80)}`);
+          errors.push(String(err.message).slice(0, 100));
         }
       }
-
-      // Log progress + pause between batches
-      const processed = Math.min(batchIdx + BATCH_SIZE, dataRows.length);
-      console.log(`[IMPORT] batch done: ${processed}/${dataRows.length} — created=${created} updated=${updated} skipped=${skipped}`);
-      if (batchIdx + BATCH_SIZE < dataRows.length) {
-        await new Promise(r => setTimeout(r, INTER_BATCH_MS));
-      }
     }
-
-    const nextStartFrom = stoppedEarly ? startFrom + created + updated + skipped : null;
 
     return Response.json({
       success: true,
       created,
       updated,
       skipped,
-      total: allDataRows.length,
-      processedInThisRun: created + updated + skipped,
-      startFrom,
-      nextStartFrom,
-      stoppedEarly,
+      total: dataRows.length,
       samples,
       errors: errors.slice(0, 10),
     });
