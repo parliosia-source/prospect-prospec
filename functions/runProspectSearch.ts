@@ -675,25 +675,30 @@ Deno.serve(async (req) => {
             } catch (_) {}
           }
 
-          await base44.entities.Prospect.create({
-            campaignId,
-            ownerUserId: campaign.ownerUserId,
-            companyName: norm.companyName,
-            website: norm.website,
-            domain: domNorm,
-            industry: norm.bestSector || requiredSectors[0] || null,
-            industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
-            industryLabel: norm.bestSector || requiredSectors[0] || null,
-            location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
-            entityType: "COMPANY",
-            status: "NOUVEAU",
-            sourceOrigin: "WEB",
-            kbEntityId: kbEntityId || undefined,
-            serpSnippet: norm.snippet,
-            sourceUrl: norm.website,
-            relevanceScore: norm.score,
-            relevanceReasons: ["tier:WEB", `webScore:${norm.score}`],
-          });
+          try {
+            await createProspectWithRetry(base44, {
+              campaignId,
+              ownerUserId: campaign.ownerUserId,
+              companyName: norm.companyName,
+              website: norm.website,
+              domain: domNorm,
+              industry: norm.bestSector || requiredSectors[0] || null,
+              industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
+              industryLabel: norm.bestSector || requiredSectors[0] || null,
+              location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
+              entityType: "COMPANY",
+              status: "NOUVEAU",
+              sourceOrigin: "WEB",
+              kbEntityId: kbEntityId || undefined,
+              serpSnippet: norm.snippet,
+              sourceUrl: norm.website,
+              relevanceScore: norm.score,
+              relevanceReasons: ["tier:WEB", `webScore:${norm.score}`],
+            }, retryStats);
+          } catch (err) {
+            if (retryStats.rateLimitExhausted) { stopReason = "RATE_LIMIT_CHECKPOINT"; break; }
+            throw err;
+          }
 
           existingDomains.add(domNorm);
           webAccepted++;
