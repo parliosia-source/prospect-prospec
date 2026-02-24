@@ -359,8 +359,28 @@ function fuzzyMatchSectors(kb, requiredSectors) {
   return { matchedCanonical: [], whichMode: null };
 }
 
+// ── Retry helper ──────────────────────────────────────────────────────────────
+async function createProspectWithRetry(base44, payload, maxRetries = 6) {
+  let lastErr;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await base44.entities.Prospect.create(payload);
+    } catch (err) {
+      const msg = (err.message || "").toLowerCase();
+      const isRateLimit = err.status === 429 || msg.includes("rate limit") || msg.includes("ratelimit") || msg.includes("too many");
+      if (!isRateLimit || attempt === maxRetries) throw err;
+      lastErr = err;
+      // Exponential backoff + jitter: 1s, 2s, 4s, 8s, 16s, 32s ± up to 500ms
+      const delay = Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 500);
+      console.log(`[RETRY] Prospect.create attempt=${attempt + 1}/${maxRetries} delay=${delay}ms err=${err.message}`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 // ── Create a Prospect record from a KB entity + scoring context ───────────────
-async function createProspectFromKb(base44, campaignId, campaign, kb, displaySectors, displayLabel, tier, sectorScore) {
+async function createProspectFromKb(base44, campaignId, campaign, kb, displaySectors, displayLabel, tier, sectorScore, retryStats) {
   const qualityFlags = [`SECTOR_${tier}:${displaySectors[0] || "UNKNOWN"}`];
   await base44.entities.Prospect.create({
     campaignId,
