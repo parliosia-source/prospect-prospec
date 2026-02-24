@@ -777,6 +777,8 @@ Deno.serve(async (req) => {
       errorMessage = "Aucun prospect trouvé. Vérifiez vos critères.";
     }
 
+    const lastRunDebugSummary = `KB accepted ${kbAccepted}/${kbStrict.length + kbExpanded.length}; WEB accepted ${webAccepted}; rateLimitHitCount ${retryStats.rateLimitHitCount}; createRetryCount ${retryStats.createRetryCount}; stopReason ${stopReason || (finalProspects.length >= targetCount ? "TARGET_REACHED" : "PARTIAL")}`;
+
     const toolUsage = {
       // ── KB pipeline ──
       kbLoaded: kbAll.length,
