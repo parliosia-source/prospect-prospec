@@ -116,8 +116,11 @@ Deno.serve(async (req) => {
     const errors = [];
     const samples = [];
 
-    // Batch insert
-    const BATCH_SIZE = 50;
+    // Batch insert — small batches with inter-batch delay to avoid 429
+    const BATCH_SIZE = 20;
+    const INTER_BATCH_DELAY_MS = 1500;
+    let processedCount = 0;
+
     for (let batchIdx = 0; batchIdx < dataRows.length; batchIdx += BATCH_SIZE) {
       const batch = dataRows.slice(batchIdx, batchIdx + BATCH_SIZE);
       const records = batch.map(row => buildKbRecord(headers, row)).filter(r => r.name && r.domain);
@@ -127,39 +130,44 @@ Deno.serve(async (req) => {
           const domNorm = (record.domain || "").toLowerCase();
 
           // Check for existing by domain
-          const existing = await base44.asServiceRole.entities.KBEntityV3.filter({ domain: domNorm }).catch(() => []);
+          const existingRec = await base44.asServiceRole.entities.KBEntityV3.filter({ domain: domNorm }).catch(() => []);
           
-          // Retry logic for rate limits
+          // Retry logic for rate limits (up to 6 retries with exponential backoff)
           let success = false;
-          for (let attempt = 0; attempt < 5 && !success; attempt++) {
+          for (let attempt = 0; attempt < 6 && !success; attempt++) {
             try {
-              if (existing.length > 0) {
-                // Update
-                await base44.asServiceRole.entities.KBEntityV3.update(existing[0].id, record);
+              if (existingRec.length > 0) {
+                await base44.asServiceRole.entities.KBEntityV3.update(existingRec[0].id, record);
                 updated++;
               } else {
-                // Create
                 await base44.asServiceRole.entities.KBEntityV3.create(record);
                 created++;
                 existingDomains.add(domNorm);
               }
               success = true;
             } catch (retryErr) {
-              const isRateLimit = retryErr.status === 429 || (retryErr.message || "").toLowerCase().includes("rate limit");
-              if (!isRateLimit || attempt === 4) throw retryErr;
-              // Exponential backoff
-              const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+              const msg = (retryErr.message || "").toLowerCase();
+              const isRateLimit = retryErr.status === 429 || msg.includes("rate limit") || msg.includes("too many");
+              if (!isRateLimit || attempt === 5) throw retryErr;
+              const delay = Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 500);
+              console.log(`[RETRY] attempt=${attempt + 1} delay=${delay}ms domain=${domNorm}`);
               await new Promise(r => setTimeout(r, delay));
             }
           }
 
+          processedCount++;
           if (samples.length < 5) {
             samples.push({ name: record.name, domain: record.domain, industryLabel: record.industryLabel, status: "ok" });
           }
         } catch (err) {
           skipped++;
-          errors.push(String(err.message).slice(0, 100));
+          errors.push(`${record.domain}: ${String(err.message).slice(0, 80)}`);
         }
+      }
+
+      // Inter-batch delay to stay under rate limits
+      if (batchIdx + BATCH_SIZE < dataRows.length) {
+        await new Promise(r => setTimeout(r, INTER_BATCH_DELAY_MS));
       }
     }
 
