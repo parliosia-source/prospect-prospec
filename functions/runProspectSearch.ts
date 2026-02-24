@@ -382,25 +382,34 @@ async function createProspectWithRetry(base44, payload, maxRetries = 6) {
 // ── Create a Prospect record from a KB entity + scoring context ───────────────
 async function createProspectFromKb(base44, campaignId, campaign, kb, displaySectors, displayLabel, tier, sectorScore, retryStats) {
   const qualityFlags = [`SECTOR_${tier}:${displaySectors[0] || "UNKNOWN"}`];
-  await base44.entities.Prospect.create({
-    campaignId,
-    ownerUserId: campaign.ownerUserId,
-    companyName: kb.name,
-    website: kb.website || `https://${kb.domain}`,
-    domain: (kb.domain || "").toLowerCase(),
-    industry: displayLabel,
-    industrySectors: displaySectors,
-    industryLabel: displayLabel,
-    location: { city: kb.hqCity || "", country: kb.hqCountry || "CA" },
-    entityType: kb.entityType || "COMPANY",
-    status: "NOUVEAU",
-    sourceOrigin: "KB_V3",
-    kbEntityId: kb.id,
-    serpSnippet: kb.notes || "",
-    sourceUrl: kb.sourceUrl || "",
-    relevanceScore: sectorScore,
-    relevanceReasons: [`tier:${tier}`, `sectorScore:${sectorScore}`],
-  });
+  try {
+    await createProspectWithRetry(base44, {
+      campaignId,
+      ownerUserId: campaign.ownerUserId,
+      companyName: kb.name,
+      website: kb.website || `https://${kb.domain}`,
+      domain: (kb.domain || "").toLowerCase(),
+      industry: displayLabel,
+      industrySectors: displaySectors,
+      industryLabel: displayLabel,
+      location: { city: kb.hqCity || "", country: kb.hqCountry || "CA" },
+      entityType: kb.entityType || "COMPANY",
+      status: "NOUVEAU",
+      sourceOrigin: "KB_V3",
+      kbEntityId: kb.id,
+      serpSnippet: kb.notes || "",
+      sourceUrl: kb.sourceUrl || "",
+      relevanceScore: sectorScore,
+      relevanceReasons: [`tier:${tier}`, `sectorScore:${sectorScore}`],
+    });
+  } catch (err) {
+    const msg = (err.message || "").toLowerCase();
+    if (msg.includes("rate limit") || msg.includes("ratelimit") || msg.includes("too many") || err.status === 429) {
+      retryStats.rateLimitHitCount++;
+      retryStats.rateLimitExhausted = true;
+    }
+    throw err;
+  }
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
