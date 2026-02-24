@@ -3,6 +3,25 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 const BRAVE_KEY = Deno.env.get("BRAVE_API_KEY");
 const SERP_KEY = Deno.env.get("SERPAPI_API_KEY");
 
+// ── Sector label normalizer (anti-mismatch: accents, case, &/et) ──────────────
+function normSector(s) {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .replace(/\s*&\s*/g, " et ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Build a map: normSector(label) → canonical label (from KB or campaign)
+// Used for fuzzy matching between campaign sectors and KB entity sectors
+function sectorsMatch(kbSectors, requiredSectors) {
+  if (!requiredSectors || requiredSectors.length === 0) return true;
+  const normRequired = requiredSectors.map(normSector);
+  const normKb = (Array.isArray(kbSectors) ? kbSectors : []).map(normSector);
+  return normKb.some(k => normRequired.includes(k));
+}
+
 // ── GM city set (normalized, no diacritics) ────────────────────────────────────
 const GM_CITIES_NORM = new Set([
   "montreal","laval","longueuil","brossard","terrebonne","repentigny","boucherville",
