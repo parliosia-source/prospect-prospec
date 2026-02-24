@@ -72,6 +72,55 @@ const SECTOR_SCORING_RULES = {
     ],
     exclusions: ["hopital","universite","fondation","gouvernement","municipalite"],
   },
+  "Santé & Pharma": {
+    strongSignals: [
+      "hopital","hospital","clinique","clinic","sante","health","pharma","pharmaceutique",
+      "medical","medecin","diagnostic","therapie","laboratoire","pharmacie","biotechnologie",
+      "biotech","recherche clinique","soins","infirmier","chirurgie","radiologie","imagerie",
+      "dentaire","optometrie","physiotherapie","ergotherapie",
+    ],
+    exclusions: [],
+  },
+  "Gouvernement & Public": {
+    strongSignals: [
+      "gouvernement","government","ministere","ministry","municipalite","municipality",
+      "ville de","city of","province","federal","agence gouvernementale","fonction publique",
+      "service public","public service","ciusss","cisss","arrondissement","prefet","depute",
+    ],
+    exclusions: [],
+  },
+  "Éducation & Formation": {
+    strongSignals: [
+      "universite","university","college","cegep","ecole","school","formation","training",
+      "enseignement","education","academique","campus","pedagogie","apprentissage","diplome",
+      "programme d etudes","recherche universitaire","faculte","professeur",
+    ],
+    exclusions: [],
+  },
+  "Associations & OBNL": {
+    strongSignals: [
+      "association","obnl","npo","organisme","charitable","benevole","ong","syndicat",
+      "communautaire","ordre professionnel","fondation","federation","regroupement",
+      "chambre de commerce","conseil","cooperative","mutuelle",
+    ],
+    exclusions: [],
+  },
+  "Industrie & Manufacture": {
+    strongSignals: [
+      "usine","manufacture","fabrication","production","industrie","acier","chimie","mecanique",
+      "automatisation","assemblage","machinerie","ingenierie","engineering","plasturgie",
+      "metallurgie","agroalimentaire","emballage","transformation",
+    ],
+    exclusions: [],
+  },
+  "Commerce de détail": {
+    strongSignals: [
+      "commerce","retail","magasin","boutique","vente","detaillant","e-commerce","ecommerce",
+      "mode","fashion","alimentation","franchise","supermarche","epicerie","quincaillerie",
+      "centre commercial","distribution","grossiste",
+    ],
+    exclusions: [],
+  },
 };
 
 // Compute sectorScore (0–100) for a KB entity against a requested sector
@@ -426,7 +475,7 @@ Deno.serve(async (req) => {
 
     // Geo filter
     function resolveRequiredGeoScopes() {
-      if (isMTL) return ["MTL_CMM"];
+      if (isMTL) return ["MTL_CMM", "QC_OTHER"];
       if (/\b(qc|qu[eé]bec)\b/.test(normText(locQuery))) return ["MTL_CMM", "QC_OTHER"];
       return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
     }
