@@ -811,6 +811,7 @@ Deno.serve(async (req) => {
       rejectedSamples,
       stopReason: stopReason || (finalStatus === "DONE" ? "TARGET_REACHED" : "PARTIAL"),
       isMTL, targetProvince,
+      lastRunDebugSummary,
     };
 
     console.log(`[FINAL] status=${finalStatus} strict=${strictCount} expanded=${expandedCount} rejected=${rejectedCount} total=${finalProspectCount}/${targetCount}`);
