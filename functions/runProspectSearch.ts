@@ -375,6 +375,8 @@ Deno.serve(async (req) => {
   const locQuery = campaign.locationQuery || "Montréal, QC";
   const requiredSectors = campaign.industrySectors || [];
   const targetCount = campaign.targetCount || 50;
+  const campaignKeywords = campaign.keywords || [];
+  const campaignKwNorm = campaignKeywords.map(normText).filter(Boolean);
   const locNorm = normText(locQuery);
   const isMTL = isGmQuery(locQuery);
   const wantQC = isMTL || /\b(qc|qu[eé]bec)\b/.test(locNorm);
@@ -486,6 +488,12 @@ Deno.serve(async (req) => {
       const tcNorm = tcRaw2 > 1 ? tcRaw2 / 100 : tcRaw2;
       score += tcNorm * 100;
       if (parseArr(e.eventSignals).length > 0) score += 10;
+      // Keyword boost from campaign keywords
+      if (campaignKwNorm.length > 0) {
+        const eBlob = normText([e.name, e.normalizedName, ...parseArr(e.keywords), e.notes, ...parseArr(e.tags)].filter(Boolean).join(" "));
+        const kwMatches = campaignKwNorm.filter(kw => eBlob.includes(kw)).length;
+        score += kwMatches * 200;
+      }
       score += (e.confidenceScore || 70) * 0.2;
       return score;
     }
