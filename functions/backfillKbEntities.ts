@@ -28,15 +28,16 @@ const MTL_CITIES = new Set([
 ]);
 
 function resolveGeo(e) {
-  // Already well-tagged → skip
-  if (e.geoScope && e.geoScope !== "UNKNOWN") return null;
+  // Already correctly tagged MTL_CMM or QC_OTHER etc → skip
+  const validScopes = new Set(["MTL_CMM", "QC_OTHER", "CANADA_OTHER"]);
+  if (validScopes.has(e.geoScope)) return null;
 
   const cityNorm = normText(e.hqCity || "");
   const provNorm = normText(e.hqProvince || "");
-  const isQC = provNorm === "qc" || provNorm === "quebec" || provNorm === "québec";
+  const isQC = provNorm === "qc" || provNorm === "quebec" || provNorm === "québec" || provNorm === "québec";
 
-  if (isQC) {
-    const isMTL = MTL_CITIES.has(cityNorm) || [...MTL_CITIES].some(mc => cityNorm.includes(mc));
+  if (isQC && cityNorm) {
+    const isMTL = MTL_CITIES.has(cityNorm) || [...MTL_CITIES].some(mc => cityNorm.startsWith(mc));
     return {
       hqRegion: isMTL ? "MTL" : "QC_OTHER",
       geoScope: isMTL ? "MTL_CMM" : "QC_OTHER",
@@ -44,15 +45,19 @@ function resolveGeo(e) {
     };
   }
 
-  // No province but has city
-  if (cityNorm) {
-    const isMTL = MTL_CITIES.has(cityNorm);
-    if (isMTL) return { hqRegion: "MTL", geoScope: "MTL_CMM", uncertain: false };
-    // Try domain extension heuristic (.qc.ca or .ca)
-    const domain = normText(e.domain || "");
-    if (domain.endsWith(".qc.ca")) return { hqRegion: "QC_OTHER", geoScope: "QC_OTHER", uncertain: true };
-    if (domain.endsWith(".ca")) return { hqRegion: "QC_OTHER", geoScope: "QC_OTHER", uncertain: true };
+  if (isQC) {
+    // Province is QC but no city — tag as QC_OTHER (uncertain)
+    return { hqRegion: "QC_OTHER", geoScope: "QC_OTHER", uncertain: true };
   }
+
+  // No province — try city only
+  if (cityNorm) {
+    if (MTL_CITIES.has(cityNorm)) return { hqRegion: "MTL", geoScope: "MTL_CMM", uncertain: false };
+  }
+
+  // Domain heuristic: .qc.ca → QC
+  const domain = normText(e.domain || "");
+  if (domain.endsWith(".qc.ca")) return { hqRegion: "QC_OTHER", geoScope: "QC_OTHER", uncertain: true };
 
   return null; // Cannot infer
 }
