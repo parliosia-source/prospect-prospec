@@ -131,7 +131,7 @@ function computeSectorScore(kb, sector) {
   const tc = tcRaw > 1 ? tcRaw / 100 : tcRaw;
   if (tc >= 0.8) { score = Math.min(100, score + 5); reasons.push("highThemeConfidence"); }
 
-  const tier = score >= 70 ? "STRICT" : score >= 55 ? "EXPANDED" : "REJECTED";
+  const tier = score >= 70 ? "STRICT" : score >= 40 ? "EXPANDED" : "REJECTED";
   return { score, tier, reasons, rejectReason: tier === "REJECTED" ? "lowScore" : null };
 }
 
@@ -269,7 +269,7 @@ function normalizeWebResult(r, requiredSectors, isMTL) {
     const score = syns.filter(s => fullText.includes(normText(s))).length;
     if (score > maxScore) { maxScore = score; bestSector = sector; }
   }
-  if (requiredSectors.length > 0 && maxScore < 2) return null;
+  if (requiredSectors.length > 0 && maxScore < 1) return null;
 
   const nameMatch = title.match(/^([A-ZÀ-ÿa-zà-ÿ][^\|–\-]{2,60}?)(?:\s*[-–|]|$)/);
   const companyName = nameMatch ? nameMatch[1].trim() : title.split("|")[0].slice(0, 100).trim();
@@ -550,7 +550,7 @@ Deno.serve(async (req) => {
     // ══════════════════════════════════════════════════════════════════════
     if (prospectCount < targetCount && !stopReason) {
       const queries = buildQueries(requiredSectors, locQuery);
-      const MAX_BRAVE = 150;
+      const MAX_BRAVE = 250;
 
       for (const query of queries) {
         if (prospectCount >= targetCount) { stopReason = "TARGET_REACHED"; break; }
@@ -564,7 +564,7 @@ Deno.serve(async (req) => {
         for (const r of results) {
           if (prospectCount >= targetCount) break;
           const norm = normalizeWebResult(r, requiredSectors, isMTL);
-          if (!norm || norm.score < 55) continue;
+          if (!norm || norm.score < 45) continue;
           const domNorm = norm.domain.toLowerCase();
           if (existingDomains.has(domNorm)) continue;
 
@@ -642,7 +642,7 @@ Deno.serve(async (req) => {
         for (const r of results) {
           if (prospectCount >= targetCount) break;
           const norm = normalizeWebResult(r, requiredSectors, isMTL);
-          if (!norm || norm.score < 55) continue;
+          if (!norm || norm.score < 45) continue;
           const domNorm = norm.domain.toLowerCase();
           if (existingDomains.has(domNorm)) continue;
 
