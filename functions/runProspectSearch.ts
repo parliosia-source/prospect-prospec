@@ -594,7 +594,12 @@ Deno.serve(async (req) => {
         });
       }
 
-      await createProspectFromKb(base44, campaignId, campaign, kb, displaySectors, displayLabel, tier, sectorScore);
+      try {
+        await createProspectFromKb(base44, campaignId, campaign, kb, displaySectors, displayLabel, tier, sectorScore, retryStats);
+      } catch (err) {
+        if (retryStats.rateLimitExhausted) { stopReason = "RATE_LIMIT_CHECKPOINT"; break; }
+        throw err;
+      }
 
       existingDomains.add(domNorm);
       kbAccepted++;
