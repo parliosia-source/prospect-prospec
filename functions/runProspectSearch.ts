@@ -307,8 +307,8 @@ Deno.serve(async (req) => {
       const signals = parseArr(e.eventSignals);
       const flags = parseArr(e.qualityFlags);
       let score = 0;
-      // Boost: primaryTheme matches requested sector
-      if (requiredSectors.length > 0 && requiredSectors.includes(e.primaryTheme)) score += 1000;
+      // Boost: primaryTheme matches requested sector (fuzzy)
+      if (requiredSectors.length > 0 && normRequired.includes(normSector(e.primaryTheme))) score += 1000;
       // themeConfidence (0–1 → 0–100)
       const tc = typeof e.themeConfidence === "number" ? e.themeConfidence : (parseFloat(e.themeConfidence) || 0.55);
       score += tc * 100;
