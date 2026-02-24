@@ -1,0 +1,439 @@
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+
+// ── Text helpers ───────────────────────────────────────────────────────────────
+function normText(s) {
+  return (s || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").trim();
+}
+function normSector(s) {
+  return normText(s).replace(/\s*&\s*/g, " et ").replace(/\s+/g, " ");
+}
+function parseArr(v) {
+  if (Array.isArray(v)) return v;
+  if (!v || String(v).trim() === "" || String(v).toLowerCase() === "nan") return [];
+  const s = String(v).trim();
+  if (s.startsWith("[")) { try { return JSON.parse(s).map(x => String(x).trim()).filter(Boolean); } catch (_) {} }
+  return s.split(",").map(x => x.trim()).filter(Boolean);
+}
+
+// ── Geo helpers ───────────────────────────────────────────────────────────────
+const MTL_CITIES = new Set([
+  "montreal","laval","longueuil","brossard","terrebonne","repentigny","boucherville",
+  "dorval","pointe-claire","kirkland","beaconsfield","saint-lambert","westmount",
+  "mont-royal","cote-saint-luc","verdun","anjou","outremont","pierrefonds","lasalle",
+  "saint-laurent","saint-jerome","blainville","boisbriand","mascouche","mirabel",
+  "la-prairie","chateauguay","candiac","laprairie","saint-jean-sur-richelieu",
+  "vaudreuil-dorion","les-coteaux","sainte-catherine","sainte-julie","varennes",
+  "montreal-est","montreal-nord","montreal-ouest","lachine","rosemont","villeray",
+  "hochelaga","riviere-des-prairies","saint-leonard","ahuntsic","mtl",
+]);
+
+function resolveGeo(e) {
+  // Already well-tagged → skip
+  if (e.geoScope && e.geoScope !== "UNKNOWN") return null;
+
+  const cityNorm = normText(e.hqCity || "");
+  const provNorm = normText(e.hqProvince || "");
+  const isQC = provNorm === "qc" || provNorm === "quebec" || provNorm === "québec";
+
+  if (isQC) {
+    const isMTL = MTL_CITIES.has(cityNorm) || [...MTL_CITIES].some(mc => cityNorm.includes(mc));
+    return {
+      hqRegion: isMTL ? "MTL" : "QC_OTHER",
+      geoScope: isMTL ? "MTL_CMM" : "QC_OTHER",
+      uncertain: false,
+    };
+  }
+
+  // No province but has city
+  if (cityNorm) {
+    const isMTL = MTL_CITIES.has(cityNorm);
+    if (isMTL) return { hqRegion: "MTL", geoScope: "MTL_CMM", uncertain: false };
+    // Try domain extension heuristic (.qc.ca or .ca)
+    const domain = normText(e.domain || "");
+    if (domain.endsWith(".qc.ca")) return { hqRegion: "QC_OTHER", geoScope: "QC_OTHER", uncertain: true };
+    if (domain.endsWith(".ca")) return { hqRegion: "QC_OTHER", geoScope: "QC_OTHER", uncertain: true };
+  }
+
+  return null; // Cannot infer
+}
+
+// ── SECTOR SCORING RULES (exhaustive, 10 UI sectors, FR/EN Québec) ─────────────
+// strongSignals: boost, exclusions: hard reject (entity tagged to wrong sector)
+const SECTOR_RULES = {
+  "Finance & Assurance": {
+    strongSignals: [
+      "banque","caisse","credit union","institution financiere","desjardins","bnc","bnp","rbc","td bank","cibc","bmo","scotiabank",
+      "assurance","insurance","courtier","broker","mutuelle","mga","underwriting","reassurance","souscripteur",
+      "investissement","gestion d actifs","asset management","capital","fonds","fonds de placement","private equity","venture capital","vc",
+      "paiement","payment","psp","acquiring","merchant services","fintech","neobanque","neobank",
+      "bourse","valeurs mobilieres","securities","fiducie","trust","mortgage","hypotheque","preteur","lender",
+      "actuariat","actuarial","souscription","planificateur financier","conseiller financier",
+      "caisses populaires","desjardins","lauzeault","industrielle alliance","ia financiere","la capitale","sun life","manuvie","manulife",
+    ],
+    exclusions: [
+      "fondation","foundation","hopital","chu","cusm","chum","hospital","centre hospitalier",
+      "universite","cegep","college","ecole secondaire","ecole primaire","campus","etablissement scolaire",
+      "festival","tourisme","tourism","musee","galerie d art",
+      "ville de","municipalite","arrondissement","gouvernement","ministere","ciusss","cisss","saq","stm","rcm",
+    ],
+  },
+  "Technologie": {
+    strongSignals: [
+      "logiciel","software","saas","cloud","informatique","it","intelligence artificielle","ia","ai","ml","machine learning",
+      "cybersecurite","donnees","data","developpement web","startup tech","plateforme numerique","erp","crm",
+      "devops","infrastructure ti","api","application mobile","solution numerique","hebergement","hosting",
+      "reseau","network","telecom it","integateur","integrateur","editeur logiciel","isvt","tech","fintech","medtech","edtech",
+      "blockchain","cloud computing","big data","analytics","bi","business intelligence","rpa","automatisation",
+    ],
+    exclusions: [
+      "hopital","centre hospitalier","universite","cegep","college","ecole",
+      "fondation","gouvernement","municipalite","ville de","ministere","ciusss","cisss",
+      "immobilier","real estate","restaurant","boutique","epicerie",
+    ],
+  },
+  "Santé & Pharma": {
+    strongSignals: [
+      "sante","health","pharma","pharmaceutique","medicament","drug","clinique","clinic","medecin","docteur","doctor",
+      "hopital","hospital","chu","chum","cusm","cisss","ciusss","centre hospitalier","soins","care",
+      "diagnostic","therapeutique","therapy","laboratoire de sante","labo","biotech","biotechnologie",
+      "dentiste","dentisterie","dental","optometrie","optometrist","physiotherapie","physiotherapy","chiro",
+      "infirmier","infirmiere","pharmacie","pharmacy","ordonnance","equipement medical","medical devices",
+      "chirurgie","urgence","soins longue duree","sld","clsc","gmf","groupe medecin","specialist",
+    ],
+    exclusions: [
+      "fondation","universite","cegep","college","ecole","gouvernement","municipalite",
+      "festival","tourisme","immobilier","technologie","logiciel","saas",
+    ],
+  },
+  "Gouvernement & Public": {
+    strongSignals: [
+      "gouvernement","government","municipalite","ville de","arrondissement","province","federal","federal","ministere",
+      "assemblee nationale","parlement","parliament","agence gouvernementale","societe d etat","crown corporation",
+      "ciusss","cisss","saq","sto","stm","rtc","remq","societe de transport","caisse depot","cdpq",
+      "commission scolaire","css","csp","regie","tribunal","cour","chambre des communes","senat",
+    ],
+    exclusions: [
+      "fondation privee","startup","venture","banque privee","assurance privee",
+    ],
+  },
+  "Éducation & Formation": {
+    strongSignals: [
+      "universite","university","college","cegep","ecole","school","formation","training","apprentissage","learning",
+      "cours","curriculum","programme","diplome","certificat","mba","bac","maitrise","doctorat","phd",
+      "pedagogie","didactique","enseignant","professeur","educateur","tuteur","e-learning","mooc",
+      "commission scolaire","css","etablissement d enseignement","centre de formation","cfp","cfpa",
+      "hec","polytechnique","uqam","udem","mcgill","concordia","ets","ulaval","sherbrooke","uqtr","uqac",
+    ],
+    exclusions: [
+      "fondation privee","gouvernement","municipalite","hopital","banque","assurance",
+    ],
+  },
+  "Associations & OBNL": {
+    strongSignals: [
+      "association","obnl","npo","nonprofit","non-profit","fondation","foundation","organisme","charitable","charite",
+      "benevole","volunteer","ong","ngo","syndicat","union","federation","regroupement","coalition","collectif",
+      "communautaire","community","ordre professionnel","chambre de commerce","board","conseil","comite",
+      "aide humanitaire","entraide","soutien social","inclusion","mission sociale","but non lucratif",
+    ],
+    exclusions: [
+      "banque","assurance","logiciel","saas","promoteur immobilier","manufacture","usine",
+    ],
+  },
+  "Immobilier": {
+    strongSignals: [
+      "immobilier","real estate","promoteur","developpeur immobilier","constructeur","courtier immobilier",
+      "gestion immobiliere","property management","reit","fonds immobilier","condo","logement","appartement",
+      "maison","bungalow","copropriete","syndic","gestionnaire d immeuble","locatif","locataire","loyer",
+      "renovation","construction residentielle","construction commerciale","terrain","lot","subdivision",
+      "hypotheque","mortgage","financement immobilier","reassurance immobiliere","estimation","evaluation",
+      "remax","via capitale","royal lepage","century 21","sutton","proprio direct",
+    ],
+    exclusions: [
+      "hopital","universite","cegep","fondation","gouvernement","municipalite",
+      "logiciel","saas","tech","informatique",
+    ],
+  },
+  "Droit & Comptabilité": {
+    strongSignals: [
+      "avocat","cabinet d avocats","law firm","barreau","notaire","huissier","juriste","conseiller juridique",
+      "comptable","cpa","audit","auditeur","fiscalite","conformite","cabinet comptable","expertise comptable",
+      "juridique","litige","contentieux","restructuration","insolvabilite","faillite","mediation","arbitrage",
+      "paralegal","clerc","greffier","registraire","droit des affaires","droit corporatif","droit fiscal",
+    ],
+    exclusions: [
+      "hopital","universite","fondation","gouvernement","municipalite","logiciel","saas","usine",
+    ],
+  },
+  "Industrie & Manufacture": {
+    strongSignals: [
+      "usine","manufacture","fabrication","production","industrie","acier","aluminium","chimie","chimique",
+      "mecanique","automatisation","assemblage","machinerie","ingenierie industrielle","oem","sous-traitance industrielle",
+      "aerospatiale","aeronautique","defense","plastique","caoutchouc","emballage","packaging","imprimerie",
+      "textile","papier","carton","bois","scierie","menuiserie","metallurgie","soudure","fonderie",
+      "equipementier","composantes","electronique","pcb","semi-conducteur","systemes embarques",
+    ],
+    exclusions: [
+      "hopital","universite","fondation","gouvernement","commerce de detail","boutique","restaurant",
+    ],
+  },
+  "Commerce de détail": {
+    strongSignals: [
+      "commerce","retail","detaillant","magasin","boutique","vente au detail","epicerie","supermarche","alimentation",
+      "franchise","franchiseur","franchisee","e-commerce","commerce electronique","mode","vetement","chaussure",
+      "quincaillerie","bricolage","electronique grand public","librairie","pharmacie de detail","depanneur",
+      "restaurant","cafe","bar","brasserie","pizzeria","traiteur","livraison repas","fast food","qsr",
+    ],
+    exclusions: [
+      "hopital","universite","fondation","gouvernement","logiciel","saas","usine","manufacture",
+    ],
+  },
+  "Transport & Logistique": {
+    strongSignals: [
+      "transport","logistique","livraison","cargo","fret","entrepot","courrier","distribution","supply chain",
+      "camionnage","expediteur","freight","3pl","4pl","transitaire","douane","maritime","aerien","ferroviaire",
+      "camion","camionnette","messagerie","colis","parcel","stockage","manutention","palettisation","chargeur",
+      "stm","rtc","remq","sto","societe de transport","autobus","metro","train","transport en commun",
+      "taxis","covoiturage","flotte","gestion flotte","fleet","drone livraison",
+    ],
+    exclusions: [
+      "hopital","universite","fondation","gouvernement","logiciel","saas","manufacture",
+    ],
+  },
+};
+
+const ALL_SECTORS = Object.keys(SECTOR_RULES);
+
+// Build a text blob from the entity for scoring
+function buildTextBlob(e) {
+  return normText([
+    e.name, e.normalizedName, e.industryLabel, e.primaryTheme,
+    ...parseArr(e.industrySectors), ...parseArr(e.themes),
+    ...parseArr(e.keywords), ...parseArr(e.synonyms),
+    ...parseArr(e.tags),
+    e.notes,
+  ].filter(Boolean).join(" "));
+}
+
+// Score a single sector against a text blob
+// Returns { score, tier, matchedSignals, rejectReason }
+function scoreSector(textBlob, sector) {
+  const rules = SECTOR_RULES[sector];
+  if (!rules) return { score: 0, tier: "REJECTED", matchedSignals: [], rejectReason: "no_rules" };
+
+  // Hard exclusion check
+  for (const excl of rules.exclusions) {
+    if (textBlob.includes(normText(excl))) {
+      return { score: 0, tier: "REJECTED", matchedSignals: [], rejectReason: `excl:${excl}` };
+    }
+  }
+
+  // Strong signal matching
+  const matchedSignals = rules.strongSignals.filter(sig => textBlob.includes(normText(sig)));
+  let score = 0;
+  if (matchedSignals.length >= 3) score = 85;
+  else if (matchedSignals.length === 2) score = 75;
+  else if (matchedSignals.length === 1) score = 60;
+  else return { score: 0, tier: "REJECTED", matchedSignals: [], rejectReason: "noSignal" };
+
+  const tier = score >= 70 ? "STRICT" : "EXPANDED";
+  return { score, tier, matchedSignals, rejectReason: null };
+}
+
+// Classify an entity across all sectors
+// Returns { strictSectors, expandedSectors, topRejectReasons, details }
+function classifyEntity(e) {
+  const textBlob = buildTextBlob(e);
+  const strictSectors = [];
+  const expandedSectors = [];
+  const rejectReasons = {};
+  const details = {};
+
+  for (const sector of ALL_SECTORS) {
+    const result = scoreSector(textBlob, sector);
+    details[sector] = result;
+    if (result.tier === "STRICT") strictSectors.push({ sector, score: result.score, signals: result.matchedSignals });
+    else if (result.tier === "EXPANDED") expandedSectors.push({ sector, score: result.score, signals: result.matchedSignals });
+    else if (result.rejectReason && result.rejectReason !== "noSignal") {
+      rejectReasons[result.rejectReason] = (rejectReasons[result.rejectReason] || 0) + 1;
+    }
+  }
+
+  // Sort by score desc
+  strictSectors.sort((a, b) => b.score - a.score);
+  expandedSectors.sort((a, b) => b.score - a.score);
+
+  return { strictSectors, expandedSectors, rejectReasons };
+}
+
+// Build update payload for an entity
+// Rules:
+//  - primaryTheme/industryLabel only if there is at least 1 STRICT sector
+//  - industrySectors: top 3 STRICT + fill with EXPANDED up to 3
+//  - qualityFlags: add SECTOR_STRICT:X or SECTOR_EXPANDED:X tags
+function buildUpdate(e, classification, existingSectors) {
+  const { strictSectors, expandedSectors } = classification;
+
+  if (strictSectors.length === 0 && expandedSectors.length === 0) return null;
+
+  // Pick top 3 sectors: STRICT first, then EXPANDED
+  const chosen = [...strictSectors, ...expandedSectors].slice(0, 3);
+  const newIndustrySectors = chosen.map(c => c.sector);
+
+  // primaryTheme only from STRICT
+  const newPrimaryTheme = strictSectors.length > 0 ? strictSectors[0].sector : null;
+  const newIndustryLabel = newPrimaryTheme;
+
+  // qualityFlags: remove old SECTOR_ flags, add new ones
+  const existingFlags = parseArr(e.qualityFlags).filter(f => !f.startsWith("SECTOR_"));
+  const newFlags = [
+    ...existingFlags,
+    ...strictSectors.slice(0, 3).map(c => `SECTOR_STRICT:${c.sector}`),
+    ...expandedSectors.slice(0, 3).map(c => `SECTOR_EXPANDED:${c.sector}`),
+  ];
+
+  const update = {
+    industrySectors: newIndustrySectors,
+    themes: newIndustrySectors,
+    qualityFlags: newFlags,
+  };
+  if (newPrimaryTheme) {
+    update.primaryTheme = newPrimaryTheme;
+    update.industryLabel = newIndustryLabel;
+  }
+
+  return update;
+}
+
+// ── Main handler ───────────────────────────────────────────────────────────────
+Deno.serve(async (req) => {
+  const base44 = createClientFromRequest(req);
+  const user = await base44.auth.me();
+  if (!user || user.role !== "admin") {
+    return Response.json({ error: "Forbidden: Admin only" }, { status: 403 });
+  }
+
+  const body = await req.json().catch(() => ({}));
+  const {
+    dryRun = true,
+    offset = 0,
+    limit = 500,
+    onlyEmptySectors = true,
+  } = body;
+
+  const START = Date.now();
+  console.log(`[BACKFILL] START dryRun=${dryRun} offset=${offset} limit=${limit} onlyEmptySectors=${onlyEmptySectors}`);
+
+  // Load batch
+  const allEntities = await base44.asServiceRole.entities.KBEntityV2.list('-created_date', limit + offset, 0).catch(() => []);
+  const batch = allEntities.slice(offset, offset + limit);
+  console.log(`[BACKFILL] totalLoaded=${allEntities.length} batchSize=${batch.length}`);
+
+  let sectorized = 0, geoFixed = 0, skipped = 0, errors = 0;
+  let mtlCmmCount = 0;
+  const sectorDistribution = {};
+  const topRejectReasons = {};
+  const sampleUpdates = [];
+  const uncertainGeo = [];
+
+  for (const e of batch) {
+    try {
+      const existingSectors = parseArr(e.industrySectors);
+      const hasExistingSectors = existingSectors.length > 0 || !!e.industryLabel;
+
+      // Skip if onlyEmptySectors and entity already has sectors
+      if (onlyEmptySectors && hasExistingSectors) {
+        skipped++;
+        // Still count existing geo
+        if (e.geoScope === "MTL_CMM") mtlCmmCount++;
+        continue;
+      }
+
+      const updatePayload = {};
+
+      // ── Geo backfill ──────────────────────────────────────────────────────
+      const geoResult = resolveGeo(e);
+      if (geoResult) {
+        updatePayload.hqRegion = geoResult.hqRegion;
+        updatePayload.geoScope = geoResult.geoScope;
+        if (geoResult.uncertain) {
+          uncertainGeo.push({ name: e.name, domain: e.domain, derivedGeoScope: geoResult.geoScope, reason: "domain_heuristic" });
+        }
+        geoFixed++;
+        if (geoResult.geoScope === "MTL_CMM") mtlCmmCount++;
+      } else {
+        if (e.geoScope === "MTL_CMM") mtlCmmCount++;
+      }
+
+      // ── Sector classification ─────────────────────────────────────────────
+      const classification = classifyEntity(e);
+
+      // Aggregate reject reasons
+      for (const [reason, count] of Object.entries(classification.rejectReasons)) {
+        topRejectReasons[reason] = (topRejectReasons[reason] || 0) + count;
+      }
+
+      const sectorUpdate = buildUpdate(e, classification, existingSectors);
+      if (sectorUpdate) {
+        Object.assign(updatePayload, sectorUpdate);
+        sectorized++;
+
+        // Track distribution
+        for (const { sector, score } of [...classification.strictSectors, ...classification.expandedSectors].slice(0, 3)) {
+          if (!sectorDistribution[sector]) sectorDistribution[sector] = { strict: 0, expanded: 0, total: 0 };
+          const tier = score >= 70 ? "strict" : "expanded";
+          sectorDistribution[sector][tier]++;
+          sectorDistribution[sector].total++;
+        }
+      }
+
+      // Sample for inspection (first 10 meaningful)
+      if (sampleUpdates.length < 10 && (sectorUpdate || geoResult)) {
+        sampleUpdates.push({
+          name: e.name,
+          domain: e.domain,
+          oldSectors: existingSectors,
+          newSectors: sectorUpdate?.industrySectors || null,
+          oldPrimaryTheme: e.primaryTheme || null,
+          newPrimaryTheme: sectorUpdate?.primaryTheme || null,
+          oldGeoScope: e.geoScope || null,
+          newGeoScope: updatePayload.geoScope || null,
+          strictSectors: classification.strictSectors.map(c => `${c.sector}(${c.score})`),
+          expandedSectors: classification.expandedSectors.map(c => `${c.sector}(${c.score})`),
+        });
+      }
+
+      // Apply if not dryRun and there's something to update
+      if (!dryRun && Object.keys(updatePayload).length > 0) {
+        await base44.asServiceRole.entities.KBEntityV2.update(e.id, updatePayload);
+      }
+
+    } catch (err) {
+      errors++;
+      console.log(`[BACKFILL] ERR ${e.domain}: ${err.message}`);
+    }
+  }
+
+  const elapsed = Date.now() - START;
+  console.log(`[BACKFILL] END sectorized=${sectorized} geoFixed=${geoFixed} skipped=${skipped} errors=${errors} elapsed=${elapsed}ms`);
+
+  return Response.json({
+    dryRun,
+    offset,
+    limit,
+    onlyEmptySectors,
+    totalInDB: allEntities.length,
+    batchProcessed: batch.length,
+    sectorized,
+    geoFixed,
+    skipped,
+    errors,
+    mtlCmmCount,
+    sectorDistribution,
+    topRejectReasons,
+    sampleUpdates,
+    uncertainGeo: uncertainGeo.slice(0, 20),
+    nextOffset: offset + batch.length,
+    isComplete: offset + batch.length >= allEntities.length,
+    elapsedMs: elapsed,
+  });
+});
