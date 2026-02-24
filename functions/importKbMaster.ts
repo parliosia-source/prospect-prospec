@@ -242,7 +242,7 @@ Deno.serve(async (req) => {
   }
 
   const body = await req.json().catch(() => ({}));
-  const { fileUrl, dryRun = false, batchSize = 8, offset = 0 } = body;
+  const { fileUrl, dryRun = false, batchSize = 8, offset = 0, limit = 200 } = body;
 
   if (!fileUrl) return Response.json({ error: "fileUrl required" }, { status: 400 });
 
@@ -270,7 +270,7 @@ Deno.serve(async (req) => {
     allRows = parseCsv(trimmed);
   }
 
-  const rows = allRows.slice(offset, offset + 9999);
+  const rows = allRows.slice(offset, offset + limit);
   console.log(`[IMPORT_MASTER] total=${allRows.length} processing=${rows.length} offset=${offset}`);
 
   // Load existing: index by id, domain, normalizedName+hqCity
