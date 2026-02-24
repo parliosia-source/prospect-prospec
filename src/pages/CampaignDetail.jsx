@@ -269,14 +269,16 @@ export default function CampaignDetail() {
             </div>
           )}
 
-          {/* FAILED — generic message, no technical details */}
+          {/* FAILED — show partial results notice if prospects exist despite FAILED status */}
           {campaign.status === "FAILED" && (
-            <div className="mt-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 flex items-start gap-2">
-              <span className="font-medium">Aucun résultat —</span>
+            <div className={`mt-3 rounded-xl px-4 py-3 text-sm flex items-start gap-2 ${counts["Tous"] > 0 ? "bg-amber-50 border border-amber-200 text-amber-800" : "bg-red-50 border border-red-200 text-red-700"}`}>
+              <span className="font-medium">{counts["Tous"] > 0 ? "Résultats partiels —" : "Aucun résultat —"}</span>
               <div>
-                Aucun prospect trouvé avec vos critères. Essayez d'élargir vos filtres.
+                {counts["Tous"] > 0
+                  ? `${counts["Tous"]} prospects trouvés malgré l'erreur. Relancez pour compléter.`
+                  : "Aucun prospect trouvé avec vos critères. Essayez d'élargir vos filtres."}
                 <div className="mt-1.5">
-                  <button onClick={handleReLaunch} className="text-xs text-red-600 underline hover:text-red-900">Relancer</button>
+                  <button onClick={handleReLaunch} className={`text-xs underline hover:opacity-80 ${counts["Tous"] > 0 ? "text-amber-700" : "text-red-600"}`}>Relancer</button>
                 </div>
               </div>
             </div>

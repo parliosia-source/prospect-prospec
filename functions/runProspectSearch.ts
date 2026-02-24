@@ -13,13 +13,13 @@ function normSector(s) {
     .trim();
 }
 
-// Build a map: normSector(label) → canonical label (from KB or campaign)
-// Used for fuzzy matching between campaign sectors and KB entity sectors
-function sectorsMatch(kbSectors, requiredSectors) {
-  if (!requiredSectors || requiredSectors.length === 0) return true;
-  const normRequired = requiredSectors.map(normSector);
-  const normKb = (Array.isArray(kbSectors) ? kbSectors : []).map(normSector);
-  return normKb.some(k => normRequired.includes(k));
+// Robust list parser: handles JSON arrays, comma-separated strings, NaN/empty
+function parseArr(v) {
+  if (Array.isArray(v)) return v;
+  if (!v || String(v).trim() === "" || String(v).toLowerCase() === "nan") return [];
+  const s = String(v).trim();
+  if (s.startsWith("[")) { try { return JSON.parse(s).map(x => String(x).trim()).filter(Boolean); } catch(_) {} }
+  return s.split(",").map(x => x.trim()).filter(Boolean);
 }
 
 // ── GM city set (normalized, no diacritics) ────────────────────────────────────
@@ -151,10 +151,8 @@ function normalizeWebResult(r, requiredSectors, isMTL) {
   if (!domain || BLOCKED_DOMAINS.has(domain)) return null;
 
   const fullText = normText(`${title} ${snippet} ${domain}`);
-  // MTL geo check
   if (isMTL && !MTL_SNIPPET_RE.test(`${title} ${snippet} ${url}`)) return null;
 
-  // Sector scoring
   let maxScore = 0;
   let bestSector = null;
   for (const sector of requiredSectors) {
@@ -167,7 +165,6 @@ function normalizeWebResult(r, requiredSectors, isMTL) {
   const nameMatch = title.match(/^([A-ZÀ-ÿa-zà-ÿ][^\|–\-]{2,60}?)(?:\s*[-–|]|$)/);
   const companyName = nameMatch ? nameMatch[1].trim() : title.split("|")[0].slice(0, 100).trim();
 
-  // Confidence score (0–100)
   let score = 0;
   if (maxScore >= 4) score += 40; else if (maxScore >= 2) score += 25;
   if (isMTL || MTL_SNIPPET_RE.test(`${title} ${snippet}`)) score += 30;
@@ -190,6 +187,48 @@ function buildQueries(sectors, loc) {
     if (synStr) queries.push(`(${synStr}) entreprises ${locCity} ${EXCL}`);
   }
   return [...new Set(queries)];
+}
+
+// ── Fuzzy sector matching — returns { matchedCanonical, whichMode } ──────────
+// matchedCanonical: array of original (canonical) requiredSectors that matched
+// whichMode: first mode that triggered the match
+function fuzzyMatchSectors(kb, requiredSectors) {
+  if (requiredSectors.length === 0) return { matchedCanonical: [], whichMode: null };
+
+  const reqNorm = requiredSectors.map(normSector);
+
+  const kbIndustrySectors = parseArr(kb.industrySectors);
+  const kbThemes = parseArr(kb.themes);
+
+  // Check industrySectors
+  const normIS = kbIndustrySectors.map(normSector);
+  const matchedFromIS = reqNorm.filter(r => normIS.includes(r));
+  if (matchedFromIS.length > 0) {
+    const canonical = requiredSectors.filter(r => matchedFromIS.includes(normSector(r)));
+    return { matchedCanonical: canonical, whichMode: "industrySectors" };
+  }
+
+  // Check themes
+  const normTh = kbThemes.map(normSector);
+  const matchedFromTh = reqNorm.filter(r => normTh.includes(r));
+  if (matchedFromTh.length > 0) {
+    const canonical = requiredSectors.filter(r => matchedFromTh.includes(normSector(r)));
+    return { matchedCanonical: canonical, whichMode: "themes" };
+  }
+
+  // Check primaryTheme
+  if (reqNorm.includes(normSector(kb.primaryTheme))) {
+    const canonical = requiredSectors.filter(r => normSector(r) === normSector(kb.primaryTheme));
+    return { matchedCanonical: canonical.length > 0 ? canonical : [kb.primaryTheme], whichMode: "primaryTheme" };
+  }
+
+  // Check industryLabel
+  if (reqNorm.includes(normSector(kb.industryLabel))) {
+    const canonical = requiredSectors.filter(r => normSector(r) === normSector(kb.industryLabel));
+    return { matchedCanonical: canonical.length > 0 ? canonical : [kb.industryLabel], whichMode: "industryLabel" };
+  }
+
+  return { matchedCanonical: [], whichMode: null };
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -223,7 +262,6 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Existing prospects
   const existingProspects = await base44.entities.Prospect.filter({ campaignId }, "-created_date", 2000).catch(() => []);
   const existingDomains = new Set(existingProspects.map(p => (p.domain || "").toLowerCase()));
   let prospectCount = existingProspects.length;
@@ -237,6 +275,13 @@ Deno.serve(async (req) => {
 
   let kbAccepted = 0, webAccepted = 0, webTopUpInserted = 0, braveRequests = 0;
   let stopReason = null;
+
+  // ── Match breakdown counters ──────────────────────────────────────────────────
+  let matchByIndustrySectorsCount = 0;
+  let matchByThemesCount = 0;
+  let matchByPrimaryThemeCount = 0;
+  let matchByIndustryLabelCount = 0;
+  const sampleMatched = [];
 
   try {
     // ══════════════════════════════════════════════════════════════════════
@@ -255,21 +300,11 @@ Deno.serve(async (req) => {
     const kbDomainSet = new Set(kbAll.map(e => (e.domain || "").toLowerCase()));
     console.log(`[KB] loaded=${kbAll.length}`);
 
-    // ── V3 helpers ──────────────────────────────────────────────────────────
-    function parseArr(v) {
-      if (Array.isArray(v)) return v;
-      if (!v || String(v).trim() === "" || String(v).toLowerCase() === "nan") return [];
-      const s = String(v).trim();
-      if (s.startsWith("[")) { try { return JSON.parse(s); } catch(_) {} }
-      return s.split(",").map(x => x.trim()).filter(Boolean);
-    }
-
     // Geo: determine required geoScope values from campaign locationQuery
     function resolveRequiredGeoScopes() {
       if (isMTL) return ["MTL_CMM"];
       const locNormInner = normText(locQuery);
       if (/\b(qc|qu[eé]bec)\b/.test(locNormInner)) return ["MTL_CMM", "QC_OTHER"];
-      // Fallback: all Canada
       return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
     }
     const requiredGeoScopes = resolveRequiredGeoScopes();
@@ -277,46 +312,39 @@ Deno.serve(async (req) => {
     // Filter: region — V3 geoScope first, fallback to hqRegion/hqProvince
     const kbRegionFiltered = kbAll.filter(e => {
       if (!e.domain || !e.website || !e.name) return false;
-      // V3 path: use geoScope if present
       if (e.geoScope && e.geoScope !== "UNKNOWN") {
         return requiredGeoScopes.includes(e.geoScope);
       }
-      // Legacy fallback: hqRegion
       if (isMTL) return ["MTL","GM"].includes(e.hqRegion);
       if (targetProvince) return e.hqProvince === targetProvince || ["MTL","GM","QC_OTHER"].includes(e.hqRegion);
       return true;
     });
     console.log(`[KB] afterRegion=${kbRegionFiltered.length} geoScopes=${requiredGeoScopes.join(",")}`);
 
-    // Filter: sector — fuzzy match (accents/case/& normalization) across all sector fields
-    const normRequired = requiredSectors.map(normSector);
+    // Filter: sector — fuzzy match using fuzzyMatchSectors, count by mode
     const kbSectorFiltered = kbRegionFiltered.filter(e => {
       if (requiredSectors.length === 0) return true;
-      const sectors = parseArr(e.industrySectors).map(normSector);
-      const themes = parseArr(e.themes).map(normSector);
-      if (sectors.some(s => normRequired.includes(s))) return true;
-      if (themes.some(s => normRequired.includes(s))) return true;
-      if (normRequired.includes(normSector(e.primaryTheme))) return true;
-      if (normRequired.includes(normSector(e.industryLabel))) return true;
-      return false;
+      const { whichMode } = fuzzyMatchSectors(e, requiredSectors);
+      if (!whichMode) return false;
+      if (whichMode === "industrySectors") matchByIndustrySectorsCount++;
+      else if (whichMode === "themes") matchByThemesCount++;
+      else if (whichMode === "primaryTheme") matchByPrimaryThemeCount++;
+      else if (whichMode === "industryLabel") matchByIndustryLabelCount++;
+      return true;
     });
-    console.log(`[KB] afterSector=${kbSectorFiltered.length}`);
+    console.log(`[KB] afterSector=${kbSectorFiltered.length} IS=${matchByIndustrySectorsCount} TH=${matchByThemesCount} PT=${matchByPrimaryThemeCount} IL=${matchByIndustryLabelCount}`);
 
-    // ── V3 Ranking: primaryTheme match + themeConfidence + eventSignals - BACKFILL penalty
+    // ── V3 Ranking ──────────────────────────────────────────────────────────
+    const normRequired = requiredSectors.map(normSector);
     function rankScore(e) {
       const signals = parseArr(e.eventSignals);
       const flags = parseArr(e.qualityFlags);
       let score = 0;
-      // Boost: primaryTheme matches requested sector (fuzzy)
       if (requiredSectors.length > 0 && normRequired.includes(normSector(e.primaryTheme))) score += 1000;
-      // themeConfidence (0–1 → 0–100)
       const tc = typeof e.themeConfidence === "number" ? e.themeConfidence : (parseFloat(e.themeConfidence) || 0.55);
       score += tc * 100;
-      // eventSignals boost
       if (signals.length > 0) score += 10;
-      // confidenceScore fallback weight (lower weight)
       score += (e.confidenceScore || 70) * 0.2;
-      // BACKFILL penalty per requested sector (fuzzy match on flag suffix)
       const normFlagSectors = flags.map(f => {
         const m = f.match(/^THEME_EXPANDED:(.+):BACKFILL_150$/);
         return m ? normSector(m[1]) : null;
@@ -334,9 +362,28 @@ Deno.serve(async (req) => {
       const domNorm = (kb.domain || "").toLowerCase();
       if (existingDomains.has(domNorm)) continue;
 
-      const matchedSectors = requiredSectors.length > 0
-        ? (Array.isArray(kb.industrySectors) ? kb.industrySectors : []).filter(s => requiredSectors.includes(s))
-        : (Array.isArray(kb.industrySectors) ? kb.industrySectors : []);
+      // ── Fuzzy sector mapping for this prospect ──────────────────────────
+      const { matchedCanonical, whichMode } = fuzzyMatchSectors(kb, requiredSectors);
+
+      // If matched, use campaign's required sectors as canonical label
+      // so the UI always shows "Finance & Assurance" instead of a stale KB label
+      const displaySectors = matchedCanonical.length > 0 ? matchedCanonical : [];
+      const displayLabel = displaySectors[0] || kb.industryLabel || null;
+
+      // Capture sample for debug (first 5 matched)
+      if (sampleMatched.length < 5) {
+        sampleMatched.push({
+          name: kb.name,
+          domain: kb.domain,
+          primaryTheme: kb.primaryTheme || null,
+          industryLabel: kb.industryLabel || null,
+          industrySectors_raw: parseArr(kb.industrySectors),
+          themes_raw: parseArr(kb.themes),
+          whichModeMatched: whichMode,
+          computedScore: rankScore(kb),
+          displayLabel,
+        });
+      }
 
       await base44.entities.Prospect.create({
         campaignId,
@@ -344,9 +391,9 @@ Deno.serve(async (req) => {
         companyName: kb.name,
         website: kb.website || `https://${kb.domain}`,
         domain: domNorm,
-        industry: matchedSectors[0] || kb.industryLabel || null,
-        industrySectors: matchedSectors,
-        industryLabel: matchedSectors[0] || kb.industryLabel || null,
+        industry: displayLabel,
+        industrySectors: displaySectors,
+        industryLabel: displayLabel,
         location: { city: kb.hqCity || "", country: kb.hqCountry || "CA" },
         entityType: kb.entityType || "COMPANY",
         status: "NOUVEAU",
@@ -392,7 +439,6 @@ Deno.serve(async (req) => {
           const domNorm = norm.domain.toLowerCase();
           if (existingDomains.has(domNorm)) continue;
 
-          // Auto-save to KBEntityV2 if score ≥ 75 and not already there
           let kbEntityId = null;
           if (!kbDomainSet.has(domNorm) && norm.score >= 75) {
             try {
@@ -406,8 +452,11 @@ Deno.serve(async (req) => {
                 hqProvince: "QC",
                 hqCountry: "CA",
                 hqRegion: isMTL ? "MTL" : "QC_OTHER",
+                geoScope: isMTL ? "MTL_CMM" : "QC_OTHER",
                 industryLabel: norm.bestSector || requiredSectors[0] || "",
+                primaryTheme: norm.bestSector || requiredSectors[0] || "",
                 industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 2),
+                themes: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 2),
                 entityType: "COMPANY",
                 tags: [],
                 notes: (norm.snippet || "").slice(0, 300),
@@ -432,9 +481,9 @@ Deno.serve(async (req) => {
             companyName: norm.companyName,
             website: norm.website,
             domain: domNorm,
-            industry: norm.bestSector || null,
-            industrySectors: norm.bestSector ? [norm.bestSector] : [],
-            industryLabel: norm.bestSector || null,
+            industry: norm.bestSector || requiredSectors[0] || null,
+            industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
+            industryLabel: norm.bestSector || requiredSectors[0] || null,
             location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
             entityType: "COMPANY",
             status: "NOUVEAU",
@@ -475,8 +524,9 @@ Deno.serve(async (req) => {
             companyName: norm.companyName,
             website: norm.website,
             domain: domNorm,
-            industry: norm.bestSector || null,
-            industrySectors: norm.bestSector ? [norm.bestSector] : [],
+            industry: norm.bestSector || requiredSectors[0] || null,
+            industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
+            industryLabel: norm.bestSector || requiredSectors[0] || null,
             location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
             entityType: "COMPANY",
             status: "NOUVEAU",
@@ -497,18 +547,22 @@ Deno.serve(async (req) => {
     // FINALIZE
     // ══════════════════════════════════════════════════════════════════════
     const finalProspects = await base44.entities.Prospect.filter({ campaignId }).catch(() => []);
+    const finalProspectCount = finalProspects.length;
 
     let finalStatus;
     let errorMessage = null;
-    if (prospectCount >= targetCount) {
+    if (finalProspectCount >= targetCount) {
       finalStatus = "DONE";
-    } else if (prospectCount > 0) {
+    } else if (finalProspectCount > 0) {
       finalStatus = "DONE_PARTIAL";
-      errorMessage = `${prospectCount}/${targetCount} prospects trouvés (sources épuisées: KB=${kbAccepted}, Brave=${webAccepted}). Relancez pour enrichir via WEB_TOPUP.`;
+      errorMessage = `${finalProspectCount}/${targetCount} prospects trouvés (KB=${kbAccepted}, Brave=${webAccepted}). Relancez pour enrichir.`;
     } else {
       finalStatus = "FAILED";
       errorMessage = "Aucun prospect trouvé. Vérifiez vos critères de secteur et de localisation.";
     }
+
+    const matchedCountBeforeRanking = kbSectorFiltered.length;
+    const matchedCountAfterDedupe = kbSectorFiltered.filter(kb => !existingDomains.has((kb.domain || "").toLowerCase())).length;
 
     const toolUsage = {
       kbLoaded: kbAll.length,
@@ -520,18 +574,27 @@ Deno.serve(async (req) => {
       braveRequests,
       braveQuotaExceeded: braveRL.quotaExceeded,
       brave429Count: braveRL.count429,
-      finalProspectCount: prospectCount,
+      finalProspectCount,
+      matchedCountBeforeRanking,
+      matchedCountAfterDedupe,
+      selectedCount: kbAccepted + webAccepted,
+      // ── Breakdown by match mode ──
+      matchByIndustrySectorsCount,
+      matchByThemesCount,
+      matchByPrimaryThemeCount,
+      matchByIndustryLabelCount,
+      sampleMatched,
       stopReason: stopReason || (finalStatus === "DONE" ? "TARGET_REACHED" : "PARTIAL"),
       isMTL,
       targetProvince,
     };
 
-    console.log(`[FINAL] status=${finalStatus} kb=${kbAccepted} web=${webAccepted} total=${prospectCount}/${targetCount}`);
+    console.log(`[FINAL] status=${finalStatus} kb=${kbAccepted} web=${webAccepted} total=${finalProspectCount}/${targetCount} matchIS=${matchByIndustrySectorsCount} matchTH=${matchByThemesCount} matchPT=${matchByPrimaryThemeCount} matchIL=${matchByIndustryLabelCount}`);
 
     await base44.entities.Campaign.update(campaignId, {
       status: finalStatus,
       progressPct: 100,
-      countProspects: finalProspects.length,
+      countProspects: finalProspectCount,
       countAnalyzed: finalProspects.filter(p => ["ANALYSÉ","QUALIFIÉ","REJETÉ","EXPORTÉ"].includes(p.status)).length,
       countQualified: finalProspects.filter(p => p.status === "QUALIFIÉ").length,
       countRejected: finalProspects.filter(p => p.status === "REJETÉ").length,
@@ -549,20 +612,44 @@ Deno.serve(async (req) => {
       errorMessage: finalStatus === "FAILED" ? errorMessage : null,
     }).catch(() => {});
 
-    return Response.json({ success: true, campaignId, prospectCount, kbAccepted, webAccepted, webTopUpInserted, status: finalStatus, toolUsage });
+    return Response.json({ success: true, campaignId, prospectCount: finalProspectCount, kbAccepted, webAccepted, webTopUpInserted, status: finalStatus, toolUsage });
 
   } catch (error) {
-    console.error("[ERROR]", error.message);
-    // IMPORTANT: Ne pas marquer FAILED si on a déjà des prospects KB
-    const partialStatus = kbAccepted > 0 ? "DONE_PARTIAL" : "FAILED";
-    const errMsg = error.message || "Erreur lors de la recherche";
+    const errorCode = error.name || "Error";
+    const errorMessage = error.message || "Erreur inconnue";
+    const errorStack = (error.stack || "").split('\n').slice(0, 5).join('\n');
+
+    console.error(`[ERROR] code=${errorCode} message=${errorMessage}`, errorStack);
+
+    const finalProspectsAfterError = await base44.entities.Prospect.filter({ campaignId }).catch(() => []);
+    const finalProspectCountAfterError = finalProspectsAfterError.length;
+
+    const errorStatus = finalProspectCountAfterError > 0 ? "DONE_PARTIAL" : "FAILED";
+    const finalErrorMessage = finalProspectCountAfterError > 0
+      ? `Partiel: ${finalProspectCountAfterError} prospects trouvés. Erreur: ${errorMessage}`
+      : errorMessage;
+
     await base44.entities.Campaign.update(campaignId, {
-      status: partialStatus,
-      errorMessage: kbAccepted > 0 ? `Partiel: ${kbAccepted} prospects KB trouvés. Erreur web: ${errMsg}` : errMsg,
-      progressPct: kbAccepted > 0 ? 100 : 0,
-      countProspects: prospectCount,
-      toolUsage: { kbAccepted, webAccepted, webTopUpInserted, errorMessage: errMsg, stopReason: "EXCEPTION" },
+      status: errorStatus,
+      errorMessage: finalErrorMessage,
+      progressPct: 100,
+      countProspects: finalProspectCountAfterError,
+      toolUsage: {
+        kbAccepted, webAccepted, webTopUpInserted,
+        matchByIndustrySectorsCount, matchByThemesCount, matchByPrimaryThemeCount, matchByIndustryLabelCount,
+        sampleMatched,
+        finalProspectCount: finalProspectCountAfterError,
+        stopReason: "EXCEPTION",
+        errorDetails: { errorCode, message: errorMessage, stack: errorStack },
+      },
     }).catch(() => {});
-    return Response.json({ error: errMsg, status: partialStatus, kbAccepted, prospectCount }, { status: 500 });
+
+    return Response.json({
+      error: finalErrorMessage,
+      status: errorStatus,
+      kbAccepted,
+      prospectCount: finalProspectCountAfterError,
+      errorDetails: { errorCode, message: errorMessage },
+    }, { status: 500 });
   }
 });
