@@ -386,11 +386,11 @@ Deno.serve(async (req) => {
   console.log(`[HARVEST] ${entryLog}`);
 
   // A) Load existing KBEntityV2 to count current and build dedup set
-  console.log(`[HARVEST] Loading KBEntityV2...`);
+  console.log(`[HARVEST] Loading KBEntityV3...`);
   let kbAll = [];
   let kbPage = 0;
   while (true) {
-    const batch = await base44.asServiceRole.entities.KBEntityV2.list('-created_date', 500, kbPage * 500).catch((e) => {
+    const batch = await base44.asServiceRole.entities.KBEntityV3.list('-created_date', 500, kbPage * 500).catch((e) => {
       console.log(`[HARVEST] KB load error page=${kbPage}: ${e.message}`);
       return [];
     });
@@ -400,14 +400,14 @@ Deno.serve(async (req) => {
     kbPage++;
     if (kbPage >= 20) break;
   }
-  console.log(`[HARVEST] KBEntityV2 loaded: ${kbAll.length}`);
+  console.log(`[HARVEST] KBEntityV3 loaded: ${kbAll.length}`);
 
   const kbDomainSet = new Set(kbAll.map(e => (e.domain || "").toLowerCase().replace(/^www\./, "")));
 
   // Count current for this sector in GM/MTL
   const currentBefore = kbAll.filter(e => {
     const secs = Array.isArray(e.industrySectors) ? e.industrySectors : [];
-    return secs.includes(sector) && (e.hqRegion === "MTL" || e.hqRegion === "GM");
+    return secs.includes(sector) && (e.geoScope === "MTL_CMM" || e.hqRegion === "MTL" || e.hqRegion === "GM");
   }).length;
 
   const need = target - currentBefore;
@@ -536,7 +536,7 @@ Deno.serve(async (req) => {
 
         if (!dryRun) {
           try {
-            await base44.asServiceRole.entities.KBEntityV2.create(record);
+            await base44.asServiceRole.entities.KBEntityV3.create(record);
             kbDomainSet.add(domNorm);
             inserted++;
             if (insertedSamples.length < 20) {

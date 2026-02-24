@@ -11,7 +11,7 @@ Deno.serve(async (req) => {
   let all = [];
   let page = 0;
   while (true) {
-    const batch = await base44.asServiceRole.entities.KBEntityV2.list('-created_date', 500, page * 500).catch(() => []);
+    const batch = await base44.asServiceRole.entities.KBEntityV3.list('-created_date', 500, page * 500).catch(() => []);
     if (!batch || batch.length === 0) break;
     all = all.concat(batch);
     if (batch.length < 500) break;
