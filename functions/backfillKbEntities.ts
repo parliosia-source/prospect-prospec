@@ -197,7 +197,7 @@ const SECTOR_RULES = {
       "restaurant","cafe","bar","brasserie","pizzeria","traiteur","livraison repas","fast food","qsr",
     ],
     exclusions: [
-      "hopital","universite","fondation","gouvernement","logiciel","saas","usine","manufacture",
+      "hopital","universite","fondation","gouvernement","logiciel","saas",
     ],
   },
   "Transport & Logistique": {
@@ -209,7 +209,7 @@ const SECTOR_RULES = {
       "taxis","covoiturage","flotte","gestion flotte","fleet","drone livraison",
     ],
     exclusions: [
-      "hopital","universite","fondation","gouvernement","logiciel","saas","manufacture",
+      "hopital","universite","fondation","gouvernement","logiciel","saas",
     ],
   },
 };
