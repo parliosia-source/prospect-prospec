@@ -63,7 +63,7 @@ function buildKbRecord(headers, values) {
     const val = values[i] || "";
     if (!key) continue;
 
-    if (["industrySectors", "themes", "keywords", "tags", "synonyms", "sectorSynonymsUsed", "eventSignals", "qualityFlags"].includes(key)) {
+    if (["industrySectors", "themes", "keywords", "tags", "synonyms", "sectorSynonymsUsed", "eventSignals", "qualityFlags", "industrySectorsDerivedReasons"].includes(key)) {
       record[key] = parseArr(val);
     } else if (["themeConfidence", "confidenceScore"].includes(key)) {
       record[key] = parseNumber(val);
@@ -116,39 +116,47 @@ Deno.serve(async (req) => {
     const errors = [];
     const samples = [];
 
-    // Batch insert
-    const BATCH_SIZE = 50;
+    // Batch insert — small batches with inter-record and inter-batch delays
+    const BATCH_SIZE = 20;
+    const INTER_RECORD_MS = 150;
+    const INTER_BATCH_MS = 2000;
+
     for (let batchIdx = 0; batchIdx < dataRows.length; batchIdx += BATCH_SIZE) {
       const batch = dataRows.slice(batchIdx, batchIdx + BATCH_SIZE);
       const records = batch.map(row => buildKbRecord(headers, row)).filter(r => r.name && r.domain);
 
+      // Strip read-only / non-schema fields that break create/update
+      const STRIP_KEYS = ["id", "created_date", "updated_date", "created_by_id", "created_by", "is_sample"];
+
       for (const record of records) {
+        // Remove read-only fields
+        for (const k of STRIP_KEYS) delete record[k];
+
         try {
           const domNorm = (record.domain || "").toLowerCase();
 
           // Check for existing by domain
-          const existing = await base44.asServiceRole.entities.KBEntityV3.filter({ domain: domNorm }).catch(() => []);
+          const existingRecs = await base44.asServiceRole.entities.KBEntityV3.filter({ domain: domNorm }).catch(() => []);
           
-          // Retry logic for rate limits
+          // Retry logic for rate limits (up to 6 attempts)
           let success = false;
-          for (let attempt = 0; attempt < 5 && !success; attempt++) {
+          for (let attempt = 0; attempt < 6 && !success; attempt++) {
             try {
-              if (existing.length > 0) {
-                // Update
-                await base44.asServiceRole.entities.KBEntityV3.update(existing[0].id, record);
+              if (existingRecs.length > 0) {
+                await base44.asServiceRole.entities.KBEntityV3.update(existingRecs[0].id, record);
                 updated++;
               } else {
-                // Create
                 await base44.asServiceRole.entities.KBEntityV3.create(record);
                 created++;
                 existingDomains.add(domNorm);
               }
               success = true;
             } catch (retryErr) {
-              const isRateLimit = retryErr.status === 429 || (retryErr.message || "").toLowerCase().includes("rate limit");
-              if (!isRateLimit || attempt === 4) throw retryErr;
-              // Exponential backoff
+              const msg = (retryErr.message || "").toLowerCase();
+              const isRateLimit = retryErr.status === 429 || msg.includes("rate limit");
+              if (!isRateLimit || attempt === 5) throw retryErr;
               const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+              console.log(`[RETRY] attempt=${attempt + 1} delay=${Math.round(delay)}ms domain=${domNorm}`);
               await new Promise(r => setTimeout(r, delay));
             }
           }
@@ -156,10 +164,20 @@ Deno.serve(async (req) => {
           if (samples.length < 5) {
             samples.push({ name: record.name, domain: record.domain, industryLabel: record.industryLabel, status: "ok" });
           }
+
+          // Throttle between records
+          await new Promise(r => setTimeout(r, INTER_RECORD_MS));
         } catch (err) {
           skipped++;
-          errors.push(String(err.message).slice(0, 100));
+          errors.push(`${record.domain}: ${String(err.message).slice(0, 80)}`);
         }
+      }
+
+      // Log progress + pause between batches
+      const processed = Math.min(batchIdx + BATCH_SIZE, dataRows.length);
+      console.log(`[IMPORT] batch done: ${processed}/${dataRows.length} — created=${created} updated=${updated} skipped=${skipped}`);
+      if (batchIdx + BATCH_SIZE < dataRows.length) {
+        await new Promise(r => setTimeout(r, INTER_BATCH_MS));
       }
     }
 
