@@ -730,23 +730,28 @@ Deno.serve(async (req) => {
           const domNorm = norm.domain.toLowerCase();
           if (existingDomains.has(domNorm)) continue;
 
-          await base44.entities.Prospect.create({
-            campaignId,
-            ownerUserId: campaign.ownerUserId,
-            companyName: norm.companyName,
-            website: norm.website,
-            domain: domNorm,
-            industry: norm.bestSector || requiredSectors[0] || null,
-            industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
-            industryLabel: norm.bestSector || requiredSectors[0] || null,
-            location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
-            entityType: "COMPANY",
-            status: "NOUVEAU",
-            sourceOrigin: "WEB",
-            serpSnippet: norm.snippet,
-            sourceUrl: norm.website,
-            relevanceScore: norm.score,
-          });
+          try {
+            await createProspectWithRetry(base44, {
+              campaignId,
+              ownerUserId: campaign.ownerUserId,
+              companyName: norm.companyName,
+              website: norm.website,
+              domain: domNorm,
+              industry: norm.bestSector || requiredSectors[0] || null,
+              industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
+              industryLabel: norm.bestSector || requiredSectors[0] || null,
+              location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
+              entityType: "COMPANY",
+              status: "NOUVEAU",
+              sourceOrigin: "WEB",
+              serpSnippet: norm.snippet,
+              sourceUrl: norm.website,
+              relevanceScore: norm.score,
+            }, retryStats);
+          } catch (err) {
+            if (retryStats.rateLimitExhausted) { stopReason = "RATE_LIMIT_CHECKPOINT"; break; }
+            throw err;
+          }
 
           existingDomains.add(domNorm);
           webAccepted++;
