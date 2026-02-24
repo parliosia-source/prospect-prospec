@@ -36,7 +36,7 @@ const SECTOR_SCORING_RULES = {
     exclusions: [
       "fondation","foundation","hopital","chu","cusm","chum","hospital","centre hospitalier",
       "universite","cegep","college","ecole","campus",
-      "festival","tourisme","tourism","evenement","event organizer",
+      "festival","tourisme","tourism",
       "ville de","municipalite","arrondissement","gouvernement","ministere","ciusss","cisss",
     ],
   },
@@ -80,6 +80,12 @@ function computeSectorScore(kb, sector) {
   const rules = SECTOR_SCORING_RULES[sector];
 
   // Build a normalized text blob from all KB fields
+  // Blob restreint pour exclusions (identité de l'entité seulement)
+  const identityBlob = normText([
+    kb.name, kb.normalizedName, kb.industryLabel, kb.primaryTheme,
+    ...parseArr(kb.industrySectors), ...parseArr(kb.themes),
+  ].filter(Boolean).join(" "));
+  // Blob complet pour strong signals (inclut keywords, synonyms, notes)
   const textBlob = normText([
     kb.name, kb.normalizedName, kb.industryLabel, kb.primaryTheme,
     ...parseArr(kb.industrySectors), ...parseArr(kb.themes),
@@ -88,19 +94,18 @@ function computeSectorScore(kb, sector) {
   ].filter(Boolean).join(" "));
 
   if (!rules) {
-    // No specific rules: use generic fuzzy match → score 60 (EXPANDED by default)
     return { score: 60, tier: "EXPANDED", reasons: ["no_rules_generic"], rejectReason: null };
   }
 
-  // ── Hard exclusion check first ──────────────────────────────────────────
+  // ── Exclusions sur identityBlob UNIQUEMENT (pas keywords/notes) ─────────
   for (const excl of rules.exclusions) {
     const exclNorm = normText(excl);
-    if (textBlob.includes(exclNorm)) {
+    if (identityBlob.includes(exclNorm)) {
       return { score: 0, tier: "REJECTED", reasons: [], rejectReason: `matchedExclusion:${excl}` };
     }
   }
 
-  // ── Strong signal scoring ───────────────────────────────────────────────
+  // ── Strong signals sur le blob complet ──────────────────────────────────
   const matchedSignals = rules.strongSignals.filter(sig => textBlob.includes(normText(sig)));
   let score = 0;
   const reasons = [];
