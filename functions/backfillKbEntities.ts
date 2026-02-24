@@ -419,7 +419,23 @@ Deno.serve(async (req) => {
 
       // Apply if not dryRun and there's something to update
       if (!dryRun && Object.keys(updatePayload).length > 0) {
-        await base44.asServiceRole.entities.KBEntityV2.update(e.id, updatePayload);
+        let retries = 0;
+        while (retries < 3) {
+          try {
+            await base44.asServiceRole.entities.KBEntityV2.update(e.id, updatePayload);
+            break;
+          } catch (updateErr) {
+            if (updateErr.message?.includes("429") || updateErr.message?.includes("Rate limit")) {
+              retries++;
+              await new Promise(r => setTimeout(r, 3000 * retries));
+            } else {
+              throw updateErr;
+            }
+          }
+        }
+        if (retries === 3) { errors++; console.log(`[BACKFILL] SKIP after 3 retries ${e.domain}`); continue; }
+        // Small delay after each write to stay under rate limit
+        await new Promise(r => setTimeout(r, 120));
       }
 
     } catch (err) {
