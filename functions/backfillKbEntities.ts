@@ -360,7 +360,7 @@ Deno.serve(async (req) => {
     offset = 0,
     limit = 500,
     onlyEmptySectors = true,
-    batchSize = 6,
+    batchSize = 1,
   } = body;
 
   const START = Date.now();
