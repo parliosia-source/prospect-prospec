@@ -384,7 +384,11 @@ Deno.serve(async (req) => {
     candidates = allEntities.filter(e => {
       const sectors = parseArr(e.industrySectors);
       const themes = parseArr(e.themes);
-      return sectors.length === 0 && !e.industryLabel && !e.primaryTheme && themes.length === 0;
+      // Also catch corrupted data (brackets in values, empty strings, etc.)
+      const cleanSectors = sectors.filter(s => s && !s.startsWith("[") && !s.endsWith("]") && s.length > 1);
+      const hasBadData = sectors.length > 0 && cleanSectors.length === 0;
+      const hasFlags = parseArr(e.qualityFlags).some(f => f.includes("BACKFILL"));
+      return hasBadData || (sectors.length === 0 && !e.industryLabel && !e.primaryTheme && themes.length === 0) || hasFlags === false && cleanSectors.length === 0;
     });
   }
 
