@@ -463,6 +463,7 @@ Deno.serve(async (req) => {
 
   let kbAccepted = 0, webAccepted = 0, webTopUpInserted = 0, braveRequests = 0;
   let stopReason = null;
+  const retryStats = { createRetryCount: 0, rateLimitHitCount: 0, rateLimitExhausted: false };
 
   // ── Instrumentation counters ──────────────────────────────────────────────
   let matchByIndustrySectorsCount = 0, matchByThemesCount = 0, matchByPrimaryThemeCount = 0, matchByIndustryLabelCount = 0;
