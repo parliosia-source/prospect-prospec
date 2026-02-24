@@ -97,22 +97,22 @@ const SECTOR_SCORING_RULES = {
 
   "Gouvernement & Public": {
     strongSignals: [
-      "gouvernement","government","federal","provincial","municipal",
-      "ville de","arrondissement","municipalite","municipalites","administration municipale",
-      "ministere","secretariat","cabinet","direction generale","sous-ministere",
+      "gouvernement du","government of","federal","provincial","municipal",
+      "ville de","arrondissement de","municipalite de","administration municipale",
+      "ministere","secretariat d etat","direction generale gouvernement","sous-ministere",
       "agence gouvernementale","societe d etat","organisme public","organisme para-public",
       "assemblee nationale","parlement","senat","chambre des communes",
-      "commission","tribunal administratif","regie","autorite","conseil",
-      "ciusss","cisss","csss","cssmi","direction de sante publique","sante publique",
-      "police","surete","gendarmerie","force de l ordre","securite publique",
-      "pompier","service d incendie","protection civile",
-      "transport en commun","stm","rtl","exo","societe de transport",
-      "hydro-quebec","gaz metro","enr","societe energie",
-      "port","aeroport","autorité aéroportuaire",
+      "tribunal administratif","regie gouvernementale","autorite gouvernementale",
+      "ciusss","cisss","cssmi","direction de sante publique","sante publique",
+      "surete du quebec","grc","gendarmerie royale","securite publique",
+      "service d incendie","protection civile",
+      "stm","rtl","exo","societe de transport en commun",
+      "hydro-quebec",
     ],
     exclusions: [
       "fondation privee","entreprise privee","startup","cabinet conseil prive",
       "banque","assurance","fintech",
+      "logiciel","software","saas",
     ],
   },
 
