@@ -369,6 +369,7 @@ Deno.serve(async (req) => {
     dryRun, totalRows: allRows.length, processed: rows.length,
     created, updated, skipped, errors, elapsedMs: elapsed,
     samples, errorList: errorList.slice(0, 20),
+    nextOffset: offset + rows.length,
     isComplete: offset + rows.length >= allRows.length,
   });
 });
