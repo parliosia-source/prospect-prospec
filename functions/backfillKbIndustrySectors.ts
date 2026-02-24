@@ -27,7 +27,7 @@ const SECTOR_SYNONYMS = {
   "Immobilier": ["immobilier", "real estate", "propriété", "property", "construction", "promoteur",
     "developer", "courtier immobilier", "agent immobilier", "logement", "housing", "bureau",
     "commercial", "bâtiment", "building", "terrain", "lot", "condo", "locatif", "REIT",
-    "hypothèque", "gestion immobilière"],
+    "hypothèque", "gestion immobilière", "résidentiel", "immobilière", "appartement", "propriétés"],
   "Droit & Comptabilité": ["avocat", "lawyer", "droit", "law", "comptable", "accountant",
     "comptabilité", "accounting", "juridique", "legal", "notaire", "notary", "cabinet", "firm",
     "fiscalité", "tax", "audit", "conformité", "compliance", "fiducie", "trust", "médiateur",
@@ -35,7 +35,8 @@ const SECTOR_SYNONYMS = {
   "Industrie & Manufacture": ["usine", "factory", "manufacture", "fabrication", "production",
     "industrie", "industry", "acier", "steel", "chimie", "chemistry", "mécanique", "mechanics",
     "automatisation", "automation", "assemblage", "assembly", "outillage", "machinerie",
-    "ingénierie", "engineering", "fournisseur", "supplier", "équipement"],
+    "ingénierie", "engineering", "fournisseur", "supplier", "équipement", "construction",
+    "infrastructure", "builder", "contractor"],
   "Commerce de détail": ["commerce", "retail", "magasin", "store", "boutique", "vente", "sale",
     "détaillant", "retailer", "marchandise", "merchandise", "épicerie", "grocery", "e-commerce",
     "électronique", "mode", "fashion", "alimentation", "franchise", "grande surface"],
@@ -139,16 +140,26 @@ function matchSectorsBackfill(fullText, sectors) {
 
     let score = 0;
     for (const kw of rules.includeStrong) {
+      // Skip keywords with 2 chars or less
+      if (kw.length <= 2) continue;
       const kwNorm = normText(kw);
-      if (textNorm.includes(kwNorm)) score += 2;
+      // Use word boundary regex to avoid partial matches
+      const regex = new RegExp(`\\b${kwNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (regex.test(textNorm)) score += 2;
     }
     for (const kw of rules.includeWeak) {
+      // Skip keywords with 2 chars or less
+      if (kw.length <= 2) continue;
       const kwNorm = normText(kw);
-      if (textNorm.includes(kwNorm)) score += 1;
+      // Use word boundary regex to avoid partial matches
+      const regex = new RegExp(`\\b${kwNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (regex.test(textNorm)) score += 1;
     }
     for (const kw of rules.excludeStrong) {
+      if (kw.length <= 2) continue;
       const kwNorm = normText(kw);
-      if (textNorm.includes(kwNorm)) score -= 3;
+      const regex = new RegExp(`\\b${kwNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (regex.test(textNorm)) score -= 3;
     }
 
     if (score >= 2) matched.push({ sector, score });

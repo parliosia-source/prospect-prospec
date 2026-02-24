@@ -1,12 +1,12 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
 const SECTOR_KEYWORDS = {
-  "Technologie": ["software", "saas", "ai", "data", "cloud", "plateforme", "logiciel", "technologie", "digital", "développement"],
+  "Technologie": ["software", "saas", "data", "cloud", "plateforme", "logiciel", "technologie", "digital", "développement"],
   "Finance & Assurance": ["assurance", "insurance", "fintech", "banque", "bank", "services financiers", "courtier", "investissement"],
   "Santé & Pharma": ["biotech", "pharma", "clinique", "hospital", "hôpital", "medical", "santé", "médecin"],
-  "Immobilier": ["immobilier", "real estate", "property", "gestion immobilière", "développement", "promoteur"],
+  "Immobilier": ["immobilier", "real estate", "property", "gestion immobilière", "développement", "promoteur", "résidentiel", "immobilière", "appartement", "housing", "propriétés", "reit"],
   "Droit & Comptabilité": ["avocat", "law", "juridique", "notaire", "cpa", "comptable", "audit", "tax"],
-  "Industrie & Manufacture": ["manufacture", "manufacturier", "industrie", "fabrication", "production", "usine", "aérospatial"],
+  "Industrie & Manufacture": ["manufacture", "manufacturier", "industrie", "fabrication", "production", "usine", "aérospatial", "construction", "infrastructure", "ingénierie", "builder", "contractor"],
   "Transport & Logistique": ["logistique", "logistics", "transport", "freight", "3pl", "livraison", "courrier", "camionnage"],
   "Commerce de détail": ["retail", "commerce de détail", "boutique", "magasin", "ecommerce"],
   "Éducation & Formation": ["école", "formation", "université", "college", "training", "bootcamp"],
@@ -21,7 +21,12 @@ function guessSectors(kb) {
   for (const [sector, keywords] of Object.entries(SECTOR_KEYWORDS)) {
     let score = 0;
     for (const kw of keywords) {
-      if (combined.includes(kw.toLowerCase())) score++;
+      // Skip keywords with 2 chars or less
+      if (kw.length <= 2) continue;
+      const kwLower = kw.toLowerCase();
+      // Use word boundary regex to avoid partial matches
+      const regex = new RegExp(`\\b${kwLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (regex.test(combined)) score++;
     }
     if (score >= 2) matched.push(sector); // Need at least 2 keywords
   }

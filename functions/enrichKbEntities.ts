@@ -73,6 +73,12 @@ const INDUSTRY_MAPPING = {
   "rénovation": "Immobilier",
   "construction": "Immobilier",
   "architecture": "Immobilier",
+  "résidentiel": "Immobilier",
+  "immobilière": "Immobilier",
+  "appartement": "Immobilier",
+  "housing": "Immobilier",
+  "propriétés": "Immobilier",
+  "reit": "Immobilier",
   
   // Droit & Comptabilité
   "avocat": "Droit & Comptabilité",
@@ -92,6 +98,10 @@ const INDUSTRY_MAPPING = {
   "mécanique": "Industrie & Manufacture",
   "chimique": "Industrie & Manufacture",
   "matériau": "Industrie & Manufacture",
+  "infrastructure": "Industrie & Manufacture",
+  "ingénierie": "Industrie & Manufacture",
+  "builder": "Industrie & Manufacture",
+  "contractor": "Industrie & Manufacture",
   
   // Commerce de détail
   "retail": "Commerce de détail",
@@ -133,7 +143,11 @@ function extractIndustrySectors(tags = [], notes = "", entityType = "") {
   const combined = [...(tags || []), notes, entityType].join(" ").toLowerCase();
   
   for (const [keyword, sector] of Object.entries(INDUSTRY_MAPPING)) {
-    if (combined.includes(keyword)) {
+    // Skip keywords with 2 chars or less
+    if (keyword.length <= 2) continue;
+    // Use word boundary regex to avoid partial matches
+    const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (regex.test(combined)) {
       sectors.add(sector);
     }
   }
