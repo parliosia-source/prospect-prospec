@@ -853,6 +853,8 @@ Deno.serve(async (req) => {
         kbAccepted, webAccepted, strictCount, expandedCount, rejectedCount,
         matchByIndustrySectorsCount, matchByThemesCount, matchByPrimaryThemeCount, matchByIndustryLabelCount,
         topRejectReasons, sampleMatched,
+        createRetryCount: retryStats.createRetryCount,
+        rateLimitHitCount: retryStats.rateLimitHitCount,
         finalProspectCount: finalProspectCountAfterError,
         stopReason: "EXCEPTION",
         errorDetails: { errorCode, message: errMsg, stack: errStack },
