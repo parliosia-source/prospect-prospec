@@ -338,7 +338,16 @@ export default function CampaignDetail() {
         ))}
       </div>
 
-      {/* Debug info hidden — sourceOrigin kept for internal use only */}
+      {/* Admin debug summary */}
+      {campaign?.lastRunDebugSummary && (
+        <div className="mb-3 px-3 py-2 bg-slate-800 text-slate-300 rounded-lg text-xs font-mono flex items-start gap-2">
+          <span className="text-slate-500 shrink-0">[debug]</span>
+          <span>{campaign.lastRunDebugSummary}</span>
+          {campaign.toolUsage?.rateLimitHitCount > 0 && (
+            <span className="ml-auto text-yellow-400 shrink-0">⚠ {campaign.toolUsage.rateLimitHitCount} rate-limit hits</span>
+          )}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 overflow-x-auto pb-1">
