@@ -455,6 +455,7 @@ Deno.serve(async (req) => {
   let strictCount = 0, expandedCount = 0, rejectedCount = 0;
   const topRejectReasons = {};
   const sampleMatched = [];
+  const rejectedSamples = [];
 
   try {
     // ══════════════════════════════════════════════════════════════════════
@@ -518,6 +519,13 @@ Deno.serve(async (req) => {
       if (tier === "REJECTED") {
         rejectedCount++;
         if (rejectReason) topRejectReasons[rejectReason] = (topRejectReasons[rejectReason] || 0) + 1;
+        if (rejectedSamples.length < 15) {
+          rejectedSamples.push({
+            name: e.name, domain: e.domain,
+            industryLabel: e.industryLabel, primaryTheme: e.primaryTheme,
+            rejectReason, score,
+          });
+        }
         continue;
       }
 
@@ -751,6 +759,7 @@ Deno.serve(async (req) => {
       matchByIndustrySectorsCount, matchByThemesCount, matchByPrimaryThemeCount, matchByIndustryLabelCount,
       topRejectReasons,
       sampleMatched,
+      rejectedSamples,
       stopReason: stopReason || (finalStatus === "DONE" ? "TARGET_REACHED" : "PARTIAL"),
       isMTL, targetProvince,
     };
