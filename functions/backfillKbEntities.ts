@@ -384,12 +384,11 @@ Deno.serve(async (req) => {
   if (onlyEmptySectors) {
     candidates = allEntities.filter(e => {
       const sectors = parseArr(e.industrySectors);
-      const themes = parseArr(e.themes);
-      // Also catch corrupted data (brackets in values, empty strings, etc.)
-      const cleanSectors = sectors.filter(s => s && !s.startsWith("[") && !s.endsWith("]") && s.length > 1);
-      const hasBadData = sectors.length > 0 && cleanSectors.length === 0;
-      const hasFlags = parseArr(e.qualityFlags).some(f => f.includes("BACKFILL"));
-      return hasBadData || (sectors.length === 0 && !e.industryLabel && !e.primaryTheme && themes.length === 0) || hasFlags === false && cleanSectors.length === 0;
+      // Detect truly empty OR corrupted data (values with brackets, single chars, etc.)
+      const cleanSectors = sectors.filter(s => s && !s.startsWith("[") && !s.endsWith("]") && s.length > 2);
+      const alreadyBackfilled = parseArr(e.qualityFlags).some(f => f.includes(":BACKFILL"));
+      if (alreadyBackfilled) return false; // already processed — skip
+      return cleanSectors.length === 0;
     });
   }
 
