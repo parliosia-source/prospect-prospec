@@ -355,7 +355,7 @@ Deno.serve(async (req) => {
     }
 
     if (!dryRun && i + batchSize < rows.length) {
-      await new Promise(r => setTimeout(r, 2500));
+      await new Promise(r => setTimeout(r, 3500));
     }
     if (i % (batchSize * 10) === 0) {
       console.log(`[IMPORT_MASTER] progress ${i}/${rows.length} created=${created} updated=${updated} errors=${errors}`);
