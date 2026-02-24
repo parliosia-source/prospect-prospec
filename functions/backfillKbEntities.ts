@@ -224,7 +224,7 @@ const SECTOR_SCORING_RULES = {
 
   "Commerce de détail": {
     strongSignals: [
-      "commerce de detail","commerce","retail","magasin","boutique","detaillant","enseigne",
+      "commerce de detail","retail","magasin","boutique","detaillant","enseigne",
       "vente au detail","vente directe","point de vente","pdv",
       "epicerie","supermarche","alimentation","depanneur","marche d alimentation","epicerie fine",
       "pharmacie de detail","para-pharmacie","soin de beaute",
