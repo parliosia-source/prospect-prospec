@@ -28,38 +28,46 @@ const MTL_CITIES = new Set([
 ]);
 
 function resolveGeo(e) {
-  // Already correctly tagged MTL_CMM or QC_OTHER etc → skip
-  const validScopes = new Set(["MTL_CMM", "QC_OTHER", "CANADA_OTHER"]);
-  if (validScopes.has(e.geoScope)) return null;
-
   const cityNorm = normText(e.hqCity || "");
   const provNorm = normText(e.hqProvince || "");
-  const isQC = provNorm === "qc" || provNorm === "quebec" || provNorm === "québec" || provNorm === "québec";
+  const isQC = provNorm === "qc" || provNorm === "quebec" || provNorm === "québec";
+  const currentGeoScope = e.geoScope || "UNKNOWN";
+  const currentHqRegion = e.hqRegion || "UNKNOWN";
+
+  // Compute what geoScope should be
+  let derivedGeoScope = null;
+  let derivedHqRegion = null;
+  let uncertain = false;
 
   if (isQC && cityNorm) {
     const isMTL = MTL_CITIES.has(cityNorm) || [...MTL_CITIES].some(mc => cityNorm.startsWith(mc));
-    return {
-      hqRegion: isMTL ? "MTL" : "QC_OTHER",
-      geoScope: isMTL ? "MTL_CMM" : "QC_OTHER",
-      uncertain: false,
-    };
+    derivedGeoScope = isMTL ? "MTL_CMM" : "QC_OTHER";
+    derivedHqRegion = isMTL ? "MTL" : "QC_OTHER";
+  } else if (isQC) {
+    // QC province but no city
+    derivedGeoScope = "QC_OTHER";
+    derivedHqRegion = "QC_OTHER";
+    uncertain = true;
+  } else if (cityNorm && MTL_CITIES.has(cityNorm)) {
+    derivedGeoScope = "MTL_CMM";
+    derivedHqRegion = "MTL";
+  } else {
+    const domain = normText(e.domain || "");
+    if (domain.endsWith(".qc.ca")) {
+      derivedGeoScope = "QC_OTHER";
+      derivedHqRegion = "QC_OTHER";
+      uncertain = true;
+    }
   }
 
-  if (isQC) {
-    // Province is QC but no city — tag as QC_OTHER (uncertain)
-    return { hqRegion: "QC_OTHER", geoScope: "QC_OTHER", uncertain: true };
-  }
+  if (!derivedGeoScope) return null; // Cannot infer
 
-  // No province — try city only
-  if (cityNorm) {
-    if (MTL_CITIES.has(cityNorm)) return { hqRegion: "MTL", geoScope: "MTL_CMM", uncertain: false };
-  }
+  // Only update if current value is missing/UNKNOWN or would be upgraded
+  const needsUpdate = (currentGeoScope === "UNKNOWN" || !currentGeoScope) ||
+                      (currentHqRegion === "UNKNOWN" || !currentHqRegion);
+  if (!needsUpdate) return null;
 
-  // Domain heuristic: .qc.ca → QC
-  const domain = normText(e.domain || "");
-  if (domain.endsWith(".qc.ca")) return { hqRegion: "QC_OTHER", geoScope: "QC_OTHER", uncertain: true };
-
-  return null; // Cannot infer
+  return { hqRegion: derivedHqRegion, geoScope: derivedGeoScope, uncertain };
 }
 
 // ── SECTOR SCORING RULES (exhaustive, 10 UI sectors, FR/EN Québec) ─────────────
