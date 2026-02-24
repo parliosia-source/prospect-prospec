@@ -823,6 +823,7 @@ Deno.serve(async (req) => {
       countQualified: finalProspects.filter(p => p.status === "QUALIFIÉ").length,
       countRejected: finalProspects.filter(p => p.status === "REJETÉ").length,
       errorMessage, toolUsage,
+      lastRunDebugSummary,
     });
 
     await base44.entities.ActivityLog.create({
