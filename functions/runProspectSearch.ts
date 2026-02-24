@@ -125,28 +125,21 @@ const SECTOR_SCORING_RULES = {
 
 // Compute sectorScore (0–100) for a KB entity against a requested sector
 // Returns { score, tier, reasons, rejectReason }
+// Simplified: if the entity matches the sector, it's accepted. No strong signal filtering.
 function computeSectorScore(kb, sector) {
   const rules = SECTOR_SCORING_RULES[sector];
 
-  // Build a normalized text blob from all KB fields
   // Blob restreint pour exclusions (identité de l'entité seulement)
   const identityBlob = normText([
     kb.name, kb.normalizedName, kb.industryLabel, kb.primaryTheme,
     ...parseArr(kb.industrySectors), ...parseArr(kb.themes),
   ].filter(Boolean).join(" "));
-  // Blob complet pour strong signals (inclut keywords, synonyms, notes)
-  const textBlob = normText([
-    kb.name, kb.normalizedName, kb.industryLabel, kb.primaryTheme,
-    ...parseArr(kb.industrySectors), ...parseArr(kb.themes),
-    ...parseArr(kb.keywords), ...parseArr(kb.synonyms),
-    kb.notes,
-  ].filter(Boolean).join(" "));
 
   if (!rules) {
-    return { score: 60, tier: "EXPANDED", reasons: ["no_rules_generic"], rejectReason: null };
+    return { score: 75, tier: "STRICT", reasons: ["no_rules_accepted"], rejectReason: null };
   }
 
-  // ── Exclusions sur identityBlob UNIQUEMENT (pas keywords/notes) ─────────
+  // ── Exclusions sur identityBlob UNIQUEMENT ──────────────────────────────
   for (const excl of rules.exclusions) {
     const exclNorm = normText(excl);
     if (identityBlob.includes(exclNorm)) {
@@ -154,34 +147,18 @@ function computeSectorScore(kb, sector) {
     }
   }
 
-  // ── Strong signals sur le blob complet ──────────────────────────────────
-  const matchedSignals = rules.strongSignals.filter(sig => textBlob.includes(normText(sig)));
-  let score = 0;
-  const reasons = [];
-
-  if (matchedSignals.length >= 3) { score = 85; reasons.push(`strongSignals:${matchedSignals.slice(0,3).join(",")}`); }
-  else if (matchedSignals.length === 2) { score = 75; reasons.push(`strongSignals:${matchedSignals.join(",")}`); }
-  else if (matchedSignals.length === 1) { score = 60; reasons.push(`strongSignal:${matchedSignals[0]}`); }
-  else {
-    // No strong signals — check if fuzzy sector tag match still qualifies at low score
-    score = 45;
-    reasons.push("noStrongSignal_fuzzyTagOnly");
-  }
+  // ── Accepted: sector match is sufficient ────────────────────────────────
+  const reasons = ["sectorMatch_accepted"];
+  let score = 75;
 
   // Boost: primaryTheme or industryLabel is an exact match
   const normSec = normSector(sector);
   if (normSector(kb.primaryTheme) === normSec || normSector(kb.industryLabel) === normSec) {
-    score = Math.min(100, score + 15);
+    score = 85;
     reasons.push("primaryTheme_exactMatch");
   }
 
-  // Boost: themeConfidence
-  let tcRaw = typeof kb.themeConfidence === "number" ? kb.themeConfidence : (parseFloat(kb.themeConfidence) || 55);
-  const tc = tcRaw > 1 ? tcRaw / 100 : tcRaw;
-  if (tc >= 0.8) { score = Math.min(100, score + 5); reasons.push("highThemeConfidence"); }
-
-  const tier = score >= 70 ? "STRICT" : score >= 40 ? "EXPANDED" : "REJECTED";
-  return { score, tier, reasons, rejectReason: tier === "REJECTED" ? "lowScore" : null };
+  return { score, tier: "STRICT", reasons, rejectReason: null };
 }
 
 // ── GM city set ────────────────────────────────────────────────────────────────
