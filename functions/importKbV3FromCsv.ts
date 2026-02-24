@@ -91,7 +91,7 @@ Deno.serve(async (req) => {
   }
 
   const body = await req.json();
-  const { fileUrl } = body;
+  const { fileUrl, startFrom = 0 } = body;
 
   if (!fileUrl) {
     return Response.json({ error: "fileUrl required" }, { status: 400 });
@@ -106,7 +106,8 @@ Deno.serve(async (req) => {
     if (rows.length < 2) throw new Error("CSV must have headers + at least 1 data row");
 
     const headers = rows[0].map(h => h.trim());
-    const dataRows = rows.slice(1);
+    const allDataRows = rows.slice(1);
+    const dataRows = allDataRows.slice(startFrom);
 
     // Load existing domains for dedup
     const existing = await base44.asServiceRole.entities.KBEntityV3.list("-updated_date", 5000).catch(() => []);
@@ -116,17 +117,26 @@ Deno.serve(async (req) => {
     const errors = [];
     const samples = [];
 
-    // Batch insert — small batches with inter-record and inter-batch delays
+    // Batch insert — small batches with throttling + time guard
     const BATCH_SIZE = 20;
-    const INTER_RECORD_MS = 150;
-    const INTER_BATCH_MS = 2000;
+    const INTER_RECORD_MS = 100;
+    const INTER_BATCH_MS = 1500;
+    const MAX_RUNTIME_MS = 150 * 1000; // stop safely before 180s timeout
+    const startTime = Date.now();
+    let stoppedEarly = false;
+
+    const STRIP_KEYS = ["id", "created_date", "updated_date", "created_by_id", "created_by", "is_sample"];
 
     for (let batchIdx = 0; batchIdx < dataRows.length; batchIdx += BATCH_SIZE) {
+      // Time guard: stop if running out of time
+      if (Date.now() - startTime > MAX_RUNTIME_MS) {
+        stoppedEarly = true;
+        console.log(`[IMPORT] time guard: stopping at row ${startFrom + batchIdx}`);
+        break;
+      }
+
       const batch = dataRows.slice(batchIdx, batchIdx + BATCH_SIZE);
       const records = batch.map(row => buildKbRecord(headers, row)).filter(r => r.name && r.domain);
-
-      // Strip read-only / non-schema fields that break create/update
-      const STRIP_KEYS = ["id", "created_date", "updated_date", "created_by_id", "created_by", "is_sample"];
 
       for (const record of records) {
         // Remove read-only fields
@@ -181,12 +191,18 @@ Deno.serve(async (req) => {
       }
     }
 
+    const nextStartFrom = stoppedEarly ? startFrom + created + updated + skipped : null;
+
     return Response.json({
       success: true,
       created,
       updated,
       skipped,
-      total: dataRows.length,
+      total: allDataRows.length,
+      processedInThisRun: created + updated + skipped,
+      startFrom,
+      nextStartFrom,
+      stoppedEarly,
       samples,
       errors: errors.slice(0, 10),
     });
