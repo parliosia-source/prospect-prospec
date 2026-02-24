@@ -316,10 +316,12 @@ Deno.serve(async (req) => {
       if (signals.length > 0) score += 10;
       // confidenceScore fallback weight (lower weight)
       score += (e.confidenceScore || 70) * 0.2;
-      // BACKFILL penalty per requested sector
-      for (const sector of requiredSectors) {
-        if (flags.includes(`THEME_EXPANDED:${sector}:BACKFILL_150`)) { score -= 20; break; }
-      }
+      // BACKFILL penalty per requested sector (fuzzy match on flag suffix)
+      const normFlagSectors = flags.map(f => {
+        const m = f.match(/^THEME_EXPANDED:(.+):BACKFILL_150$/);
+        return m ? normSector(m[1]) : null;
+      }).filter(Boolean);
+      if (normFlagSectors.some(f => normRequired.includes(f))) { score -= 20; }
       return score;
     }
 
