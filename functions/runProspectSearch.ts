@@ -275,14 +275,16 @@ async function serpSearch(query) {
 }
 
 // ── Web result normalizer ─────────────────────────────────────────────────────
-// Retourne { ...result, rejectReason } ou null (avec rejectReason pour compteurs)
+// Retourne TOUJOURS un objet avec `accepted: boolean`.
+// Si accepted=false → { accepted: false, rejectReason: string }
+// Si accepted=true  → { accepted: true, companyName, website, domain, snippet, title, bestSector, score }
 function normalizeWebResult(r, requiredSectors, _isMTL) {
   const url = r.url || "";
   const title = r.title || "";
   const snippet = r.snippet || "";
-  if (BLOCKED_PATHS.test(url) || HARD_EXCL_TITLE.test(title)) return { rejectReason: "blockedPathOrTitle" };
+  if (BLOCKED_PATHS.test(url) || HARD_EXCL_TITLE.test(title)) return { accepted: false, rejectReason: "blockedPathOrTitle" };
   const domain = getDomain(url);
-  if (!domain || BLOCKED_DOMAINS.has(domain)) return { rejectReason: "blockedDomain" };
+  if (!domain || BLOCKED_DOMAINS.has(domain)) return { accepted: false, rejectReason: "blockedDomain" };
 
   const fullText = normText(`${title} ${snippet} ${domain}`);
   // Supprimé: filtre MTL_SNIPPET_RE qui bloquait des résultats web pertinents
@@ -294,7 +296,7 @@ function normalizeWebResult(r, requiredSectors, _isMTL) {
     const score = syns.filter(s => fullText.includes(normText(s))).length;
     if (score > maxScore) { maxScore = score; bestSector = sector; }
   }
-  if (requiredSectors.length > 0 && maxScore < 1) return { rejectReason: "noSectorMatch" };
+  if (requiredSectors.length > 0 && maxScore < 1) return { accepted: false, rejectReason: "noSectorMatch" };
 
   const nameMatch = title.match(/^([A-ZÀ-ÿa-zà-ÿ][^\|–\-]{2,60}?)(?:\s*[-–|]|$)/);
   const companyName = nameMatch ? nameMatch[1].trim() : title.split("|")[0].slice(0, 100).trim();
@@ -305,7 +307,7 @@ function normalizeWebResult(r, requiredSectors, _isMTL) {
   if (domain.length < 40 && !/directory|pages|annuaire|list|rank|top|blog|news|review/.test(domain)) score += 20;
   if (snippet.length > 80) score += 10;
 
-  return { companyName, website: url, domain, snippet, title, bestSector, score, rejectReason: null };
+  return { accepted: true, companyName, website: url, domain, snippet, title, bestSector, score };
 }
 
 // ── Brave query builder ────────────────────────────────────────────────────────
