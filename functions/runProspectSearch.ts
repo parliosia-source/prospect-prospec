@@ -3,17 +3,16 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 const BRAVE_KEY = Deno.env.get("BRAVE_API_KEY");
 const SERP_KEY = Deno.env.get("SERPAPI_API_KEY");
 
-// ── Sector label normalizer (anti-mismatch: accents, case, &/et) ──────────────
+// ── Text normalizers ──────────────────────────────────────────────────────────
 function normSector(s) {
-  return (s || "")
-    .toLowerCase()
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
-    .replace(/\s*&\s*/g, " et ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return (s || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .replace(/\s*&\s*/g, " et ").replace(/\s+/g, " ").trim();
+}
+function normText(s) {
+  return (s || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").trim();
 }
 
-// Robust list parser: handles JSON arrays, comma-separated strings, NaN/empty
+// Robust list parser
 function parseArr(v) {
   if (Array.isArray(v)) return v;
   if (!v || String(v).trim() === "" || String(v).toLowerCase() === "nan") return [];
@@ -22,7 +21,115 @@ function parseArr(v) {
   return s.split(",").map(x => x.trim()).filter(Boolean);
 }
 
-// ── GM city set (normalized, no diacritics) ────────────────────────────────────
+// ── Sector scoring rules ──────────────────────────────────────────────────────
+// Each sector has: strongSignals (boost), exclusions (hard reject / heavy penalty)
+const SECTOR_SCORING_RULES = {
+  "Finance & Assurance": {
+    strongSignals: [
+      "banque","caisse","credit union","institution financiere","desjardins",
+      "assurance","insurance","courtier","broker","mutuelle","mga","underwriting","reassurance",
+      "investissement","gestion d actifs","asset management","capital","fonds","fonds de placement","pe","vc","private equity","venture capital",
+      "paiement","payment","psp","acquiring","merchant services","fintech",
+      "bourse","valeurs mobilieres","securities","fiducie","trust","mortgage","hypotheque",
+      "actuariat","actuarial","souscription",
+    ],
+    exclusions: [
+      "fondation","foundation","hopital","chu","cusm","chum","hospital","centre hospitalier",
+      "universite","cegep","college","ecole","campus",
+      "festival","tourisme","tourism","evenement","event organizer",
+      "ville de","municipalite","arrondissement","gouvernement","ministere","ciusss","cisss",
+    ],
+  },
+  "Immobilier": {
+    strongSignals: [
+      "immobilier","real estate","promoteur","developpeur immobilier","constructeur","courtier immobilier",
+      "gestion immobiliere","property management","reit","fonds immobilier","condo","logement",
+      "hypotheque","mortgage","financement immobilier",
+    ],
+    exclusions: ["hopital","universite","fondation","gouvernement","municipalite"],
+  },
+  "Droit & Comptabilite": {
+    strongSignals: [
+      "avocat","cabinet d avocats","law firm","barreau","notaire","huissier",
+      "comptable","cpa","audit","fiscalite","conformite","cabinet comptable",
+      "juridique","litige","contentieux","restructuration",
+    ],
+    exclusions: ["hopital","universite","fondation","gouvernement"],
+  },
+  "Transport & Logistique": {
+    strongSignals: [
+      "transport","logistique","livraison","cargo","fret","entrepot","courrier",
+      "distribution","supply chain","camionnage","expediteur","freight","3pl","4pl",
+      "transitaire","douane","maritime","aerien","ferroviaire",
+    ],
+    exclusions: ["hopital","universite","fondation","gouvernement"],
+  },
+  "Technologie": {
+    strongSignals: [
+      "logiciel","software","saas","cloud","informatique","it","intelligence artificielle","ia","ai",
+      "cybersecurite","donnees","data","developpement","startup tech","plateforme numerique",
+      "erp","crm","devops","infrastructure","api","mobile app","solution numerique",
+    ],
+    exclusions: ["hopital","universite","fondation","gouvernement","municipalite"],
+  },
+};
+
+// Compute sectorScore (0–100) for a KB entity against a requested sector
+// Returns { score, tier, reasons, rejectReason }
+function computeSectorScore(kb, sector) {
+  const rules = SECTOR_SCORING_RULES[sector];
+
+  // Build a normalized text blob from all KB fields
+  const textBlob = normText([
+    kb.name, kb.normalizedName, kb.industryLabel, kb.primaryTheme,
+    ...parseArr(kb.industrySectors), ...parseArr(kb.themes),
+    ...parseArr(kb.keywords), ...parseArr(kb.synonyms),
+    kb.notes,
+  ].filter(Boolean).join(" "));
+
+  if (!rules) {
+    // No specific rules: use generic fuzzy match → score 60 (EXPANDED by default)
+    return { score: 60, tier: "EXPANDED", reasons: ["no_rules_generic"], rejectReason: null };
+  }
+
+  // ── Hard exclusion check first ──────────────────────────────────────────
+  for (const excl of rules.exclusions) {
+    const exclNorm = normText(excl);
+    if (textBlob.includes(exclNorm)) {
+      return { score: 0, tier: "REJECTED", reasons: [], rejectReason: `matchedExclusion:${excl}` };
+    }
+  }
+
+  // ── Strong signal scoring ───────────────────────────────────────────────
+  const matchedSignals = rules.strongSignals.filter(sig => textBlob.includes(normText(sig)));
+  let score = 0;
+  const reasons = [];
+
+  if (matchedSignals.length >= 3) { score = 85; reasons.push(`strongSignals:${matchedSignals.slice(0,3).join(",")}`); }
+  else if (matchedSignals.length === 2) { score = 75; reasons.push(`strongSignals:${matchedSignals.join(",")}`); }
+  else if (matchedSignals.length === 1) { score = 60; reasons.push(`strongSignal:${matchedSignals[0]}`); }
+  else {
+    // No strong signals — check if fuzzy sector tag match still qualifies at low score
+    score = 45;
+    reasons.push("noStrongSignal_fuzzyTagOnly");
+  }
+
+  // Boost: primaryTheme or industryLabel is an exact match
+  const normSec = normSector(sector);
+  if (normSector(kb.primaryTheme) === normSec || normSector(kb.industryLabel) === normSec) {
+    score = Math.min(100, score + 15);
+    reasons.push("primaryTheme_exactMatch");
+  }
+
+  // Boost: themeConfidence
+  const tc = typeof kb.themeConfidence === "number" ? kb.themeConfidence : (parseFloat(kb.themeConfidence) || 0.55);
+  if (tc >= 0.8) { score = Math.min(100, score + 5); reasons.push("highThemeConfidence"); }
+
+  const tier = score >= 70 ? "STRICT" : score >= 55 ? "EXPANDED" : "REJECTED";
+  return { score, tier, reasons, rejectReason: tier === "REJECTED" ? "lowScore" : null };
+}
+
+// ── GM city set ────────────────────────────────────────────────────────────────
 const GM_CITIES_NORM = new Set([
   "montreal","laval","longueuil","brossard","terrebonne","repentigny","boucherville",
   "dorval","pointe-claire","kirkland","beaconsfield","saint-lambert","westmount",
@@ -34,10 +141,6 @@ const GM_CITIES_NORM = new Set([
   "hochelaga","riviere-des-prairies","saint-leonard","ahuntsic","mtl","grand montreal",
   "greater montreal","grand-montreal",
 ]);
-
-function normText(s) {
-  return (s || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").trim();
-}
 
 function isGmQuery(locationQuery) {
   const norm = normText(locationQuery);
@@ -56,10 +159,10 @@ const PROVINCE_ALIASES = {
   "AB": ["alberta","ab","calgary","edmonton"],
 };
 
-// ── Sector synonyms (for web queries) ─────────────────────────────────────────
+// ── Sector synonyms (for web search queries) ──────────────────────────────────
 const SECTOR_SYNONYMS = {
   "Technologie": ["IT","informatique","SaaS","logiciel","software","cloud","IA","AI","numérique","digital","cybersécurité","données","data","développement","startup","tech","infrastructure","DevOps","plateforme","ERP","CRM"],
-  "Finance & Assurance": ["banque","bank","assurance","insurance","crédit","placement","investissement","fintech","capital","fonds","courtage"],
+  "Finance & Assurance": ["banque","bank","assurance","insurance","crédit","placement","investissement","fintech","capital","fonds","courtage","caisse","gestion d'actifs","paiement"],
   "Santé & Pharma": ["santé","health","pharma","médical","hôpital","clinique","médecin","diagnostic","thérapie","laboratoire","pharmacie"],
   "Gouvernement & Public": ["gouvernement","government","municipalité","ville","province","fédéral","ministère","assemblée","CISSS","CIUSSS","agence gouvernementale"],
   "Éducation & Formation": ["université","collège","école","cégep","formation","training","cours","apprentissage","diplôme"],
@@ -141,7 +244,7 @@ async function serpSearch(query) {
   } catch { return []; }
 }
 
-// ── Result normalizer ──────────────────────────────────────────────────────────
+// ── Web result normalizer ─────────────────────────────────────────────────────
 function normalizeWebResult(r, requiredSectors, isMTL) {
   const url = r.url || "";
   const title = r.title || "";
@@ -189,46 +292,60 @@ function buildQueries(sectors, loc) {
   return [...new Set(queries)];
 }
 
-// ── Fuzzy sector matching — returns { matchedCanonical, whichMode } ──────────
-// matchedCanonical: array of original (canonical) requiredSectors that matched
-// whichMode: first mode that triggered the match
+// ── Fuzzy sector matching ─────────────────────────────────────────────────────
 function fuzzyMatchSectors(kb, requiredSectors) {
   if (requiredSectors.length === 0) return { matchedCanonical: [], whichMode: null };
-
   const reqNorm = requiredSectors.map(normSector);
+  const kbIS = parseArr(kb.industrySectors);
+  const kbTh = parseArr(kb.themes);
 
-  const kbIndustrySectors = parseArr(kb.industrySectors);
-  const kbThemes = parseArr(kb.themes);
-
-  // Check industrySectors
-  const normIS = kbIndustrySectors.map(normSector);
+  const normIS = kbIS.map(normSector);
   const matchedFromIS = reqNorm.filter(r => normIS.includes(r));
   if (matchedFromIS.length > 0) {
-    const canonical = requiredSectors.filter(r => matchedFromIS.includes(normSector(r)));
-    return { matchedCanonical: canonical, whichMode: "industrySectors" };
+    return { matchedCanonical: requiredSectors.filter(r => matchedFromIS.includes(normSector(r))), whichMode: "industrySectors" };
   }
 
-  // Check themes
-  const normTh = kbThemes.map(normSector);
+  const normTh = kbTh.map(normSector);
   const matchedFromTh = reqNorm.filter(r => normTh.includes(r));
   if (matchedFromTh.length > 0) {
-    const canonical = requiredSectors.filter(r => matchedFromTh.includes(normSector(r)));
-    return { matchedCanonical: canonical, whichMode: "themes" };
+    return { matchedCanonical: requiredSectors.filter(r => matchedFromTh.includes(normSector(r))), whichMode: "themes" };
   }
 
-  // Check primaryTheme
   if (reqNorm.includes(normSector(kb.primaryTheme))) {
     const canonical = requiredSectors.filter(r => normSector(r) === normSector(kb.primaryTheme));
     return { matchedCanonical: canonical.length > 0 ? canonical : [kb.primaryTheme], whichMode: "primaryTheme" };
   }
 
-  // Check industryLabel
   if (reqNorm.includes(normSector(kb.industryLabel))) {
     const canonical = requiredSectors.filter(r => normSector(r) === normSector(kb.industryLabel));
     return { matchedCanonical: canonical.length > 0 ? canonical : [kb.industryLabel], whichMode: "industryLabel" };
   }
 
   return { matchedCanonical: [], whichMode: null };
+}
+
+// ── Create a Prospect record from a KB entity + scoring context ───────────────
+async function createProspectFromKb(base44, campaignId, campaign, kb, displaySectors, displayLabel, tier, sectorScore) {
+  const qualityFlags = [`SECTOR_${tier}:${displaySectors[0] || "UNKNOWN"}`];
+  await base44.entities.Prospect.create({
+    campaignId,
+    ownerUserId: campaign.ownerUserId,
+    companyName: kb.name,
+    website: kb.website || `https://${kb.domain}`,
+    domain: (kb.domain || "").toLowerCase(),
+    industry: displayLabel,
+    industrySectors: displaySectors,
+    industryLabel: displayLabel,
+    location: { city: kb.hqCity || "", country: kb.hqCountry || "CA" },
+    entityType: kb.entityType || "COMPANY",
+    status: "NOUVEAU",
+    sourceOrigin: "KB_V2",
+    kbEntityId: kb.id,
+    serpSnippet: kb.notes || "",
+    sourceUrl: kb.sourceUrl || "",
+    relevanceScore: sectorScore,
+    relevanceReasons: [`tier:${tier}`, `sectorScore:${sectorScore}`],
+  });
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -276,11 +393,10 @@ Deno.serve(async (req) => {
   let kbAccepted = 0, webAccepted = 0, webTopUpInserted = 0, braveRequests = 0;
   let stopReason = null;
 
-  // ── Match breakdown counters ──────────────────────────────────────────────────
-  let matchByIndustrySectorsCount = 0;
-  let matchByThemesCount = 0;
-  let matchByPrimaryThemeCount = 0;
-  let matchByIndustryLabelCount = 0;
+  // ── Instrumentation counters ──────────────────────────────────────────────
+  let matchByIndustrySectorsCount = 0, matchByThemesCount = 0, matchByPrimaryThemeCount = 0, matchByIndustryLabelCount = 0;
+  let strictCount = 0, expandedCount = 0, rejectedCount = 0;
+  const topRejectReasons = {};
   const sampleMatched = [];
 
   try {
@@ -300,108 +416,106 @@ Deno.serve(async (req) => {
     const kbDomainSet = new Set(kbAll.map(e => (e.domain || "").toLowerCase()));
     console.log(`[KB] loaded=${kbAll.length}`);
 
-    // Geo: determine required geoScope values from campaign locationQuery
+    // Geo filter
     function resolveRequiredGeoScopes() {
       if (isMTL) return ["MTL_CMM"];
-      const locNormInner = normText(locQuery);
-      if (/\b(qc|qu[eé]bec)\b/.test(locNormInner)) return ["MTL_CMM", "QC_OTHER"];
+      if (/\b(qc|qu[eé]bec)\b/.test(normText(locQuery))) return ["MTL_CMM", "QC_OTHER"];
       return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
     }
     const requiredGeoScopes = resolveRequiredGeoScopes();
 
-    // Filter: region — V3 geoScope first, fallback to hqRegion/hqProvince
     const kbRegionFiltered = kbAll.filter(e => {
       if (!e.domain || !e.website || !e.name) return false;
-      if (e.geoScope && e.geoScope !== "UNKNOWN") {
-        return requiredGeoScopes.includes(e.geoScope);
-      }
+      if (e.geoScope && e.geoScope !== "UNKNOWN") return requiredGeoScopes.includes(e.geoScope);
       if (isMTL) return ["MTL","GM"].includes(e.hqRegion);
       if (targetProvince) return e.hqProvince === targetProvince || ["MTL","GM","QC_OTHER"].includes(e.hqRegion);
       return true;
     });
-    console.log(`[KB] afterRegion=${kbRegionFiltered.length} geoScopes=${requiredGeoScopes.join(",")}`);
+    console.log(`[KB] afterRegion=${kbRegionFiltered.length}`);
 
-    // Filter: sector — fuzzy match using fuzzyMatchSectors, count by mode
-    const kbSectorFiltered = kbRegionFiltered.filter(e => {
-      if (requiredSectors.length === 0) return true;
-      const { whichMode } = fuzzyMatchSectors(e, requiredSectors);
-      if (!whichMode) return false;
+    // Sector filter + score every entity
+    // Categorize into STRICT / EXPANDED / REJECTED
+    const kbStrict = [];
+    const kbExpanded = [];
+
+    for (const e of kbRegionFiltered) {
+      if (requiredSectors.length === 0) {
+        // No sector filter → score 60 EXPANDED for everyone
+        kbExpanded.push({ kb: e, sectorScore: 60, tier: "EXPANDED", reasons: ["noFilter"], whichMode: null });
+        continue;
+      }
+
+      const { matchedCanonical, whichMode } = fuzzyMatchSectors(e, requiredSectors);
+      if (!whichMode) continue; // doesn't match at all
+
+      // Track match mode
       if (whichMode === "industrySectors") matchByIndustrySectorsCount++;
       else if (whichMode === "themes") matchByThemesCount++;
       else if (whichMode === "primaryTheme") matchByPrimaryThemeCount++;
       else if (whichMode === "industryLabel") matchByIndustryLabelCount++;
-      return true;
-    });
-    console.log(`[KB] afterSector=${kbSectorFiltered.length} IS=${matchByIndustrySectorsCount} TH=${matchByThemesCount} PT=${matchByPrimaryThemeCount} IL=${matchByIndustryLabelCount}`);
 
-    // ── V3 Ranking ──────────────────────────────────────────────────────────
+      // Compute sector score for the first matched sector
+      const targetSector = matchedCanonical[0] || requiredSectors[0];
+      const { score, tier, reasons, rejectReason } = computeSectorScore(e, targetSector);
+
+      if (tier === "REJECTED") {
+        rejectedCount++;
+        if (rejectReason) topRejectReasons[rejectReason] = (topRejectReasons[rejectReason] || 0) + 1;
+        continue;
+      }
+
+      const entry = { kb: e, matchedCanonical, whichMode, sectorScore: score, tier, reasons };
+      if (tier === "STRICT") { strictCount++; kbStrict.push(entry); }
+      else { expandedCount++; kbExpanded.push(entry); }
+    }
+
+    console.log(`[KB] strict=${strictCount} expanded=${expandedCount} rejected=${rejectedCount}`);
+
+    // ── V3 ranking within each tier ────────────────────────────────────────
     const normRequired = requiredSectors.map(normSector);
-    function rankScore(e) {
-      const signals = parseArr(e.eventSignals);
-      const flags = parseArr(e.qualityFlags);
-      let score = 0;
-      if (requiredSectors.length > 0 && normRequired.includes(normSector(e.primaryTheme))) score += 1000;
+    function rankScore(e, sectorScore) {
+      let score = sectorScore * 10; // base from sector score
+      if (normRequired.includes(normSector(e.primaryTheme))) score += 1000;
       const tc = typeof e.themeConfidence === "number" ? e.themeConfidence : (parseFloat(e.themeConfidence) || 0.55);
       score += tc * 100;
-      if (signals.length > 0) score += 10;
+      if (parseArr(e.eventSignals).length > 0) score += 10;
       score += (e.confidenceScore || 70) * 0.2;
-      const normFlagSectors = flags.map(f => {
-        const m = f.match(/^THEME_EXPANDED:(.+):BACKFILL_150$/);
-        return m ? normSector(m[1]) : null;
-      }).filter(Boolean);
-      if (normFlagSectors.some(f => normRequired.includes(f))) { score -= 20; }
       return score;
     }
 
-    kbSectorFiltered.sort((a, b) => rankScore(b) - rankScore(a));
+    kbStrict.sort((a, b) => rankScore(b.kb, b.sectorScore) - rankScore(a.kb, a.sectorScore));
+    kbExpanded.sort((a, b) => rankScore(b.kb, b.sectorScore) - rankScore(a.kb, a.sectorScore));
 
-    for (const kb of kbSectorFiltered) {
+    // ── Insert: STRICT first, then EXPANDED ────────────────────────────────
+    const orderedKb = [...kbStrict, ...kbExpanded];
+
+    for (const { kb, matchedCanonical, tier, sectorScore, reasons } of orderedKb) {
       if (prospectCount >= targetCount) { stopReason = "TARGET_REACHED"; break; }
       if (Date.now() - START > MAX_MS * 0.45) { stopReason = "TIME_BUDGET_KB"; break; }
 
       const domNorm = (kb.domain || "").toLowerCase();
       if (existingDomains.has(domNorm)) continue;
 
-      // ── Fuzzy sector mapping for this prospect ──────────────────────────
-      const { matchedCanonical, whichMode } = fuzzyMatchSectors(kb, requiredSectors);
-
-      // If matched, use campaign's required sectors as canonical label
-      // so the UI always shows "Finance & Assurance" instead of a stale KB label
-      const displaySectors = matchedCanonical.length > 0 ? matchedCanonical : [];
+      const displaySectors = (matchedCanonical && matchedCanonical.length > 0) ? matchedCanonical : requiredSectors.slice(0, 1);
       const displayLabel = displaySectors[0] || kb.industryLabel || null;
 
-      // Capture sample for debug (first 5 matched)
+      // Sample for debug (first 5)
       if (sampleMatched.length < 5) {
         sampleMatched.push({
-          name: kb.name,
-          domain: kb.domain,
+          name: kb.name, domain: kb.domain,
           primaryTheme: kb.primaryTheme || null,
           industryLabel: kb.industryLabel || null,
-          industrySectors_raw: parseArr(kb.industrySectors),
-          themes_raw: parseArr(kb.themes),
-          whichModeMatched: whichMode,
-          computedScore: rankScore(kb),
+          industrySectors_raw: parseArr(kb.industrySectors).slice(0, 3),
+          themes_raw: parseArr(kb.themes).slice(0, 3),
+          whichModeMatched: matchedCanonical ? orderedKb.find(o => o.kb === kb)?.whichMode : null,
+          sectorScore,
+          tier,
+          reasons,
           displayLabel,
         });
       }
 
-      await base44.entities.Prospect.create({
-        campaignId,
-        ownerUserId: campaign.ownerUserId,
-        companyName: kb.name,
-        website: kb.website || `https://${kb.domain}`,
-        domain: domNorm,
-        industry: displayLabel,
-        industrySectors: displaySectors,
-        industryLabel: displayLabel,
-        location: { city: kb.hqCity || "", country: kb.hqCountry || "CA" },
-        entityType: kb.entityType || "COMPANY",
-        status: "NOUVEAU",
-        sourceOrigin: "KB_V2",
-        kbEntityId: kb.id,
-        serpSnippet: kb.notes || "",
-        sourceUrl: kb.sourceUrl || "",
-      });
+      await createProspectFromKb(base44, campaignId, campaign, kb, displaySectors, displayLabel, tier, sectorScore);
 
       existingDomains.add(domNorm);
       kbAccepted++;
@@ -417,7 +531,7 @@ Deno.serve(async (req) => {
     console.log(`[KB] END kbAccepted=${kbAccepted} total=${prospectCount}`);
 
     // ══════════════════════════════════════════════════════════════════════
-    // PHASE 2 — Brave Search (top-up)
+    // PHASE 2 — Brave Search (top-up if needed)
     // ══════════════════════════════════════════════════════════════════════
     if (prospectCount < targetCount && !stopReason) {
       const queries = buildQueries(requiredSectors, locQuery);
@@ -430,7 +544,7 @@ Deno.serve(async (req) => {
 
         const { results, rateLimited } = await braveSearch(query, 20);
         braveRequests++;
-        if (rateLimited && braveRL.quotaExceeded) { console.log("[BRAVE] quota exceeded — skipping to web fallback"); break; }
+        if (rateLimited && braveRL.quotaExceeded) { console.log("[BRAVE] quota exceeded"); break; }
 
         for (const r of results) {
           if (prospectCount >= targetCount) break;
@@ -455,14 +569,11 @@ Deno.serve(async (req) => {
                 geoScope: isMTL ? "MTL_CMM" : "QC_OTHER",
                 industryLabel: norm.bestSector || requiredSectors[0] || "",
                 primaryTheme: norm.bestSector || requiredSectors[0] || "",
-                industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 2),
-                themes: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 2),
+                industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
+                themes: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
                 entityType: "COMPANY",
-                tags: [],
-                notes: (norm.snippet || "").slice(0, 300),
-                keywords: [],
-                synonyms: [],
-                sectorSynonymsUsed: [],
+                tags: [], notes: (norm.snippet || "").slice(0, 300),
+                keywords: [], synonyms: [], sectorSynonymsUsed: [],
                 confidenceScore: norm.score,
                 qualityFlags: ["WEB_TOPUP"],
                 sourceOrigin: "WEB",
@@ -491,6 +602,8 @@ Deno.serve(async (req) => {
             kbEntityId: kbEntityId || undefined,
             serpSnippet: norm.snippet,
             sourceUrl: norm.website,
+            relevanceScore: norm.score,
+            relevanceReasons: ["tier:WEB", `webScore:${norm.score}`],
           });
 
           existingDomains.add(domNorm);
@@ -498,11 +611,11 @@ Deno.serve(async (req) => {
           prospectCount++;
         }
       }
-      console.log(`[BRAVE] END braveRequests=${braveRequests} webAccepted=${webAccepted} webTopUpInserted=${webTopUpInserted}`);
+      console.log(`[BRAVE] END braveRequests=${braveRequests} webAccepted=${webAccepted}`);
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // PHASE 3 — SerpAPI fallback (only if Brave quota exceeded)
+    // PHASE 3 — SerpAPI fallback
     // ══════════════════════════════════════════════════════════════════════
     if (prospectCount < targetCount && braveRL.quotaExceeded && SERP_KEY && !stopReason) {
       console.log("[SERP] Starting SerpAPI fallback");
@@ -533,6 +646,7 @@ Deno.serve(async (req) => {
             sourceOrigin: "WEB",
             serpSnippet: norm.snippet,
             sourceUrl: norm.website,
+            relevanceScore: norm.score,
           });
 
           existingDomains.add(domNorm);
@@ -549,57 +663,43 @@ Deno.serve(async (req) => {
     const finalProspects = await base44.entities.Prospect.filter({ campaignId }).catch(() => []);
     const finalProspectCount = finalProspects.length;
 
-    let finalStatus;
-    let errorMessage = null;
-    if (finalProspectCount >= targetCount) {
-      finalStatus = "DONE";
-    } else if (finalProspectCount > 0) {
+    let finalStatus, errorMessage = null;
+    if (finalProspectCount >= targetCount) finalStatus = "DONE";
+    else if (finalProspectCount > 0) {
       finalStatus = "DONE_PARTIAL";
-      errorMessage = `${finalProspectCount}/${targetCount} prospects trouvés (KB=${kbAccepted}, Brave=${webAccepted}). Relancez pour enrichir.`;
+      errorMessage = `${finalProspectCount}/${targetCount} prospects trouvés (STRICT=${strictCount}, EXPANDED=${expandedCount}, KB=${kbAccepted}, Brave=${webAccepted}). Relancez pour enrichir.`;
     } else {
       finalStatus = "FAILED";
-      errorMessage = "Aucun prospect trouvé. Vérifiez vos critères de secteur et de localisation.";
+      errorMessage = "Aucun prospect trouvé. Vérifiez vos critères.";
     }
-
-    const matchedCountBeforeRanking = kbSectorFiltered.length;
-    const matchedCountAfterDedupe = kbSectorFiltered.filter(kb => !existingDomains.has((kb.domain || "").toLowerCase())).length;
 
     const toolUsage = {
       kbLoaded: kbAll.length,
       kbRegionFiltered: kbRegionFiltered.length,
-      kbSectorFiltered: kbSectorFiltered.length,
-      kbAccepted,
-      webAccepted,
-      webTopUpInserted,
+      matchedCountBeforeRanking: kbStrict.length + kbExpanded.length,
+      strictCount, expandedCount, rejectedCount,
+      kbAccepted, webAccepted, webTopUpInserted,
       braveRequests,
       braveQuotaExceeded: braveRL.quotaExceeded,
       brave429Count: braveRL.count429,
       finalProspectCount,
-      matchedCountBeforeRanking,
-      matchedCountAfterDedupe,
       selectedCount: kbAccepted + webAccepted,
-      // ── Breakdown by match mode ──
-      matchByIndustrySectorsCount,
-      matchByThemesCount,
-      matchByPrimaryThemeCount,
-      matchByIndustryLabelCount,
+      matchByIndustrySectorsCount, matchByThemesCount, matchByPrimaryThemeCount, matchByIndustryLabelCount,
+      topRejectReasons,
       sampleMatched,
       stopReason: stopReason || (finalStatus === "DONE" ? "TARGET_REACHED" : "PARTIAL"),
-      isMTL,
-      targetProvince,
+      isMTL, targetProvince,
     };
 
-    console.log(`[FINAL] status=${finalStatus} kb=${kbAccepted} web=${webAccepted} total=${finalProspectCount}/${targetCount} matchIS=${matchByIndustrySectorsCount} matchTH=${matchByThemesCount} matchPT=${matchByPrimaryThemeCount} matchIL=${matchByIndustryLabelCount}`);
+    console.log(`[FINAL] status=${finalStatus} strict=${strictCount} expanded=${expandedCount} rejected=${rejectedCount} total=${finalProspectCount}/${targetCount}`);
 
     await base44.entities.Campaign.update(campaignId, {
-      status: finalStatus,
-      progressPct: 100,
+      status: finalStatus, progressPct: 100,
       countProspects: finalProspectCount,
       countAnalyzed: finalProspects.filter(p => ["ANALYSÉ","QUALIFIÉ","REJETÉ","EXPORTÉ"].includes(p.status)).length,
       countQualified: finalProspects.filter(p => p.status === "QUALIFIÉ").length,
       countRejected: finalProspects.filter(p => p.status === "REJETÉ").length,
-      errorMessage,
-      toolUsage,
+      errorMessage, toolUsage,
     });
 
     await base44.entities.ActivityLog.create({
@@ -612,44 +712,37 @@ Deno.serve(async (req) => {
       errorMessage: finalStatus === "FAILED" ? errorMessage : null,
     }).catch(() => {});
 
-    return Response.json({ success: true, campaignId, prospectCount: finalProspectCount, kbAccepted, webAccepted, webTopUpInserted, status: finalStatus, toolUsage });
+    return Response.json({ success: true, campaignId, prospectCount: finalProspectCount, kbAccepted, webAccepted, status: finalStatus, toolUsage });
 
   } catch (error) {
     const errorCode = error.name || "Error";
-    const errorMessage = error.message || "Erreur inconnue";
-    const errorStack = (error.stack || "").split('\n').slice(0, 5).join('\n');
-
-    console.error(`[ERROR] code=${errorCode} message=${errorMessage}`, errorStack);
+    const errMsg = error.message || "Erreur inconnue";
+    const errStack = (error.stack || "").split('\n').slice(0, 5).join('\n');
+    console.error(`[ERROR] code=${errorCode} message=${errMsg}`);
 
     const finalProspectsAfterError = await base44.entities.Prospect.filter({ campaignId }).catch(() => []);
     const finalProspectCountAfterError = finalProspectsAfterError.length;
-
     const errorStatus = finalProspectCountAfterError > 0 ? "DONE_PARTIAL" : "FAILED";
     const finalErrorMessage = finalProspectCountAfterError > 0
-      ? `Partiel: ${finalProspectCountAfterError} prospects trouvés. Erreur: ${errorMessage}`
-      : errorMessage;
+      ? `Partiel: ${finalProspectCountAfterError} prospects trouvés. Erreur: ${errMsg}` : errMsg;
 
     await base44.entities.Campaign.update(campaignId, {
-      status: errorStatus,
-      errorMessage: finalErrorMessage,
-      progressPct: 100,
+      status: errorStatus, errorMessage: finalErrorMessage, progressPct: 100,
       countProspects: finalProspectCountAfterError,
       toolUsage: {
-        kbAccepted, webAccepted, webTopUpInserted,
+        kbAccepted, webAccepted, strictCount, expandedCount, rejectedCount,
         matchByIndustrySectorsCount, matchByThemesCount, matchByPrimaryThemeCount, matchByIndustryLabelCount,
-        sampleMatched,
+        topRejectReasons, sampleMatched,
         finalProspectCount: finalProspectCountAfterError,
         stopReason: "EXCEPTION",
-        errorDetails: { errorCode, message: errorMessage, stack: errorStack },
+        errorDetails: { errorCode, message: errMsg, stack: errStack },
       },
     }).catch(() => {});
 
     return Response.json({
-      error: finalErrorMessage,
-      status: errorStatus,
-      kbAccepted,
-      prospectCount: finalProspectCountAfterError,
-      errorDetails: { errorCode, message: errorMessage },
+      error: finalErrorMessage, status: errorStatus,
+      kbAccepted, prospectCount: finalProspectCountAfterError,
+      errorDetails: { errorCode, message: errMsg },
     }, { status: 500 });
   }
 });
