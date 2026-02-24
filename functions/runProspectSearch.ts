@@ -125,36 +125,34 @@ const SECTOR_SCORING_RULES = {
 
 // Compute sectorScore (0–100) for a KB entity against a requested sector
 // Returns { score, tier, reasons, rejectReason }
-// Simplified: if the entity matches the sector, it's accepted. No strong signal filtering.
+// SECTOR-ONLY: si le secteur match, l'entité est TOUJOURS acceptée. Jamais de REJECTED.
 function computeSectorScore(kb, sector) {
   const rules = SECTOR_SCORING_RULES[sector];
+  const reasons = ["sectorMatch_accepted"];
+  let score = 75;
 
-  // Blob restreint pour exclusions (identité de l'entité seulement)
+  if (!rules) {
+    return { score, tier: "STRICT", reasons: ["no_rules_accepted"], rejectReason: null };
+  }
+
+  // ── Exclusions non bloquantes (pénalité de tri uniquement) ──────────────
   const identityBlob = normText([
     kb.name, kb.normalizedName, kb.industryLabel, kb.primaryTheme,
     ...parseArr(kb.industrySectors), ...parseArr(kb.themes),
   ].filter(Boolean).join(" "));
 
-  if (!rules) {
-    return { score: 75, tier: "STRICT", reasons: ["no_rules_accepted"], rejectReason: null };
-  }
-
-  // ── Exclusions sur identityBlob UNIQUEMENT ──────────────────────────────
   for (const excl of rules.exclusions) {
-    const exclNorm = normText(excl);
-    if (identityBlob.includes(exclNorm)) {
-      return { score: 0, tier: "REJECTED", reasons: [], rejectReason: `matchedExclusion:${excl}` };
+    if (identityBlob.includes(normText(excl))) {
+      score = Math.max(50, score - 25);
+      reasons.push(`exclusion_hit_non_blocking:${excl}`);
+      break; // une seule pénalité
     }
   }
-
-  // ── Accepted: sector match is sufficient ────────────────────────────────
-  const reasons = ["sectorMatch_accepted"];
-  let score = 75;
 
   // Boost: primaryTheme or industryLabel is an exact match
   const normSec = normSector(sector);
   if (normSector(kb.primaryTheme) === normSec || normSector(kb.industryLabel) === normSec) {
-    score = 85;
+    score = Math.max(score, 85);
     reasons.push("primaryTheme_exactMatch");
   }
 
@@ -277,49 +275,52 @@ async function serpSearch(query) {
 }
 
 // ── Web result normalizer ─────────────────────────────────────────────────────
-function normalizeWebResult(r, requiredSectors, isMTL) {
+// Retourne { ...result, rejectReason } ou null (avec rejectReason pour compteurs)
+function normalizeWebResult(r, requiredSectors, _isMTL) {
   const url = r.url || "";
   const title = r.title || "";
   const snippet = r.snippet || "";
-  if (BLOCKED_PATHS.test(url) || HARD_EXCL_TITLE.test(title)) return null;
+  if (BLOCKED_PATHS.test(url) || HARD_EXCL_TITLE.test(title)) return { rejectReason: "blockedPathOrTitle" };
   const domain = getDomain(url);
-  if (!domain || BLOCKED_DOMAINS.has(domain)) return null;
+  if (!domain || BLOCKED_DOMAINS.has(domain)) return { rejectReason: "blockedDomain" };
 
   const fullText = normText(`${title} ${snippet} ${domain}`);
-  if (isMTL && !MTL_SNIPPET_RE.test(`${title} ${snippet} ${url}`)) return null;
+  // Supprimé: filtre MTL_SNIPPET_RE qui bloquait des résultats web pertinents
 
   let maxScore = 0;
   let bestSector = null;
   for (const sector of requiredSectors) {
-    const syns = SECTOR_SYNONYMS[sector] || [];
+    const syns = [sector, ...(SECTOR_SYNONYMS[sector] || [])];
     const score = syns.filter(s => fullText.includes(normText(s))).length;
     if (score > maxScore) { maxScore = score; bestSector = sector; }
   }
-  if (requiredSectors.length > 0 && maxScore < 1) return null;
+  if (requiredSectors.length > 0 && maxScore < 1) return { rejectReason: "noSectorMatch" };
 
   const nameMatch = title.match(/^([A-ZÀ-ÿa-zà-ÿ][^\|–\-]{2,60}?)(?:\s*[-–|]|$)/);
   const companyName = nameMatch ? nameMatch[1].trim() : title.split("|")[0].slice(0, 100).trim();
 
   let score = 0;
-  if (maxScore >= 4) score += 40; else if (maxScore >= 2) score += 25;
-  if (isMTL || MTL_SNIPPET_RE.test(`${title} ${snippet}`)) score += 30;
+  if (maxScore >= 4) score += 40; else if (maxScore >= 2) score += 25; else score += 10;
+  if (MTL_SNIPPET_RE.test(`${title} ${snippet}`)) score += 30;
   if (domain.length < 40 && !/directory|pages|annuaire|list|rank|top|blog|news|review/.test(domain)) score += 20;
   if (snippet.length > 80) score += 10;
 
-  return { companyName, website: url, domain, snippet, title, bestSector, score };
+  return { companyName, website: url, domain, snippet, title, bestSector, score, rejectReason: null };
 }
 
 // ── Brave query builder ────────────────────────────────────────────────────────
 const EXCL = '-site:linkedin.com -site:facebook.com -site:glassdoor.com -site:indeed.com -site:eventbrite.com -site:wikipedia.org';
-function buildQueries(sectors, loc) {
+function buildQueries(sectors, loc, keywords) {
   const locCity = loc.split(",")[0].trim();
+  const kwStr = (keywords || []).slice(0, 4).map(k => `"${k}"`).join(" ");
   const queries = [];
-  for (const sector of sectors.slice(0, 3)) {
+  for (const sector of sectors.slice(0, 6)) {
     const syns = (SECTOR_SYNONYMS[sector] || []).slice(0, 5);
     const synStr = syns.slice(0, 3).map(s => `"${s}"`).join(" OR ");
     queries.push(`entreprises "${sector}" ${locCity} ${EXCL}`);
     queries.push(`companies "${sector}" ${locCity} ${EXCL}`);
     if (synStr) queries.push(`(${synStr}) entreprises ${locCity} ${EXCL}`);
+    if (kwStr) queries.push(`entreprises "${sector}" ${kwStr} ${locCity} ${EXCL}`);
   }
   return [...new Set(queries)];
 }
@@ -371,7 +372,7 @@ async function createProspectFromKb(base44, campaignId, campaign, kb, displaySec
     location: { city: kb.hqCity || "", country: kb.hqCountry || "CA" },
     entityType: kb.entityType || "COMPANY",
     status: "NOUVEAU",
-    sourceOrigin: "KB_V2",
+    sourceOrigin: "KB_V3",
     kbEntityId: kb.id,
     serpSnippet: kb.notes || "",
     sourceUrl: kb.sourceUrl || "",
@@ -399,9 +400,14 @@ Deno.serve(async (req) => {
   const MAX_MS = 90 * 1000;
 
   const locQuery = campaign.locationQuery || "Montréal, QC";
-  const requiredSectors = campaign.industrySectors || [];
   const targetCount = campaign.targetCount || 50;
-  const campaignKeywords = campaign.keywords || [];
+
+  // ── Secteurs canoniques vs secteurs libres ──────────────────────────────
+  const CANON_SECTORS = new Set(Object.keys(SECTOR_SYNONYMS));
+  const requiredSectorsRaw = campaign.industrySectors || [];
+  const requiredSectors = requiredSectorsRaw.filter(s => CANON_SECTORS.has(s));
+  const freeSectorTerms = requiredSectorsRaw.filter(s => !CANON_SECTORS.has(s));
+  const campaignKeywords = [...(campaign.keywords || []), ...freeSectorTerms];
   const campaignKwNorm = campaignKeywords.map(normText).filter(Boolean);
   const locNorm = normText(locQuery);
   const isMTL = isGmQuery(locQuery);
@@ -417,7 +423,7 @@ Deno.serve(async (req) => {
   const existingDomains = new Set(existingProspects.map(p => (p.domain || "").toLowerCase()));
   let prospectCount = existingProspects.length;
 
-  console.log(`[START] campaignId=${campaignId} target=${targetCount} existing=${prospectCount} isMTL=${isMTL} sectors=${requiredSectors.join(",")}`);
+  console.log(`[START] campaignId=${campaignId} target=${targetCount} existing=${prospectCount} isMTL=${isMTL} sectors=${requiredSectors.join(",")} freeSectorTerms=${freeSectorTerms.join(",")} keywords=${campaignKeywords.join(",")}`);
 
   if (prospectCount >= targetCount) {
     await base44.entities.Campaign.update(campaignId, { status: "DONE", progressPct: 100, countProspects: prospectCount });
@@ -430,6 +436,8 @@ Deno.serve(async (req) => {
   // ── Instrumentation counters ──────────────────────────────────────────────
   let matchByIndustrySectorsCount = 0, matchByThemesCount = 0, matchByPrimaryThemeCount = 0, matchByIndustryLabelCount = 0;
   let strictCount = 0, expandedCount = 0, rejectedCount = 0;
+  let kbAfterMissingFields = 0;
+  let webRejectedBlockedDomain = 0, webRejectedBlockedPathOrTitle = 0, webRejectedNoSectorMatch = 0;
   const topRejectReasons = {};
   const sampleMatched = [];
   const rejectedSamples = [];
@@ -451,8 +459,13 @@ Deno.serve(async (req) => {
     const kbDomainSet = new Set(kbAll.map(e => (e.domain || "").toLowerCase()));
     console.log(`[KB] loaded=${kbAll.length}`);
 
-    // Geo filter
+    // Geo filter — basé sur campaign.locationKey si disponible, sinon heuristique
     function resolveRequiredGeoScopes() {
+      const locKey = (campaign.locationKey || "").toUpperCase();
+      if (locKey === "MONTREAL") return ["MTL_CMM"];
+      if (locKey === "QUEBEC_CITY" || locKey === "QUEBEC") return ["MTL_CMM", "QC_OTHER"];
+      if (locKey === "CANADA") return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
+      // fallback heuristique texte
       if (isMTL) return ["MTL_CMM", "QC_OTHER"];
       if (/\b(qc|qu[eé]bec)\b/.test(normText(locQuery))) return ["MTL_CMM", "QC_OTHER"];
       return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
@@ -461,6 +474,7 @@ Deno.serve(async (req) => {
 
     const kbRegionFiltered = kbAll.filter(e => {
       if (!e.domain || !e.website || !e.name) return false;
+      kbAfterMissingFields++;
       if (e.geoScope && e.geoScope !== "UNKNOWN") return requiredGeoScopes.includes(e.geoScope);
       if (isMTL) return ["MTL","GM"].includes(e.hqRegion);
       if (targetProvince) return e.hqProvince === targetProvince || ["MTL","GM","QC_OTHER"].includes(e.hqRegion);
@@ -493,27 +507,15 @@ Deno.serve(async (req) => {
       const targetSector = matchedCanonical[0] || requiredSectors[0];
       const { score, tier, reasons, rejectReason } = computeSectorScore(e, targetSector);
 
-      if (tier === "REJECTED") {
-        rejectedCount++;
-        if (rejectReason) topRejectReasons[rejectReason] = (topRejectReasons[rejectReason] || 0) + 1;
-        if (rejectedSamples.length < 15) {
-          rejectedSamples.push({
-            name: e.name, domain: e.domain,
-            industryLabel: e.industryLabel, primaryTheme: e.primaryTheme,
-            rejectReason, score,
-          });
-        }
-        continue;
-      }
-
+      // SECTOR-ONLY: plus de REJECTED — tout match secteur est accepté
       const entry = { kb: e, matchedCanonical, whichMode, sectorScore: score, tier, reasons };
-      if (tier === "STRICT") { strictCount++; kbStrict.push(entry); }
-      else { expandedCount++; kbExpanded.push(entry); }
+      strictCount++;
+      kbStrict.push(entry);
     }
 
-    console.log(`[KB] strict=${strictCount} expanded=${expandedCount} rejected=${rejectedCount}`);
+    console.log(`[KB] afterSector=${kbStrict.length + kbExpanded.length} (strict=${strictCount} expanded=${expandedCount})`);
 
-    // ── V3 ranking within each tier ────────────────────────────────────────
+    // ── Ranking (tri uniquement, pas de cutoff) ──────────────────────────────
     const normRequired = requiredSectors.map(normSector);
     function rankScore(e, sectorScore) {
       let score = sectorScore * 10; // base from sector score
@@ -583,7 +585,7 @@ Deno.serve(async (req) => {
     // PHASE 2 — Brave Search (top-up if needed)
     // ══════════════════════════════════════════════════════════════════════
     if (prospectCount < targetCount && !stopReason) {
-      const queries = buildQueries(requiredSectors, locQuery);
+      const queries = buildQueries(requiredSectors, locQuery, campaignKeywords);
       const MAX_BRAVE = 250;
 
       for (const query of queries) {
@@ -598,7 +600,13 @@ Deno.serve(async (req) => {
         for (const r of results) {
           if (prospectCount >= targetCount) break;
           const norm = normalizeWebResult(r, requiredSectors, isMTL);
-          if (!norm || norm.score < 45) continue;
+          if (!norm) continue;
+          if (norm.rejectReason) {
+            if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
+            else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
+            else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
+            continue;
+          }
           const domNorm = norm.domain.toLowerCase();
           if (existingDomains.has(domNorm)) continue;
 
@@ -668,7 +676,7 @@ Deno.serve(async (req) => {
     // ══════════════════════════════════════════════════════════════════════
     if (prospectCount < targetCount && braveRL.quotaExceeded && SERP_KEY && !stopReason) {
       console.log("[SERP] Starting SerpAPI fallback");
-      const serpQueries = buildQueries(requiredSectors, locQuery).slice(0, 5);
+      const serpQueries = buildQueries(requiredSectors, locQuery, campaignKeywords).slice(0, 5);
       for (const query of serpQueries) {
         if (prospectCount >= targetCount) break;
         if (Date.now() - START > MAX_MS * 0.95) break;
@@ -676,7 +684,13 @@ Deno.serve(async (req) => {
         for (const r of results) {
           if (prospectCount >= targetCount) break;
           const norm = normalizeWebResult(r, requiredSectors, isMTL);
-          if (!norm || norm.score < 45) continue;
+          if (!norm) continue;
+          if (norm.rejectReason) {
+            if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
+            else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
+            else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
+            continue;
+          }
           const domNorm = norm.domain.toLowerCase();
           if (existingDomains.has(domNorm)) continue;
 
@@ -723,17 +737,29 @@ Deno.serve(async (req) => {
     }
 
     const toolUsage = {
+      // ── KB pipeline ──
       kbLoaded: kbAll.length,
-      kbRegionFiltered: kbRegionFiltered.length,
-      matchedCountBeforeRanking: kbStrict.length + kbExpanded.length,
-      strictCount, expandedCount, rejectedCount,
-      kbAccepted, webAccepted, webTopUpInserted,
+      kbAfterMissingFields,
+      kbAfterRegion: kbRegionFiltered.length,
+      kbAfterSector: kbStrict.length + kbExpanded.length,
+      kbAccepted,
+      // ── Web pipeline ──
+      webAccepted, webTopUpInserted,
+      webRejectedBlockedDomain, webRejectedBlockedPathOrTitle, webRejectedNoSectorMatch,
       braveRequests,
       braveQuotaExceeded: braveRL.quotaExceeded,
       brave429Count: braveRL.count429,
+      // ── Totals ──
       finalProspectCount,
       selectedCount: kbAccepted + webAccepted,
+      // ── Sector matching detail ──
       matchByIndustrySectorsCount, matchByThemesCount, matchByPrimaryThemeCount, matchByIndustryLabelCount,
+      strictCount, expandedCount, rejectedCount,
+      // ── Canonical vs free sectors ──
+      requiredSectorsCanonical: requiredSectors,
+      freeSectorTerms,
+      campaignKeywordsUsed: campaignKeywords,
+      // ── Debug samples ──
       topRejectReasons,
       sampleMatched,
       rejectedSamples,
