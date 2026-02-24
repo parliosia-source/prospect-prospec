@@ -510,8 +510,8 @@ Deno.serve(async (req) => {
       console.log(`[BACKFILL] progress ${i}/${page.length} sectorUpdated=${sectorUpdated} geoUpdated=${geoUpdated}`);
     }
 
-    if (!dryRun && i + batchSize < page.length) {
-      await new Promise(r => setTimeout(r, 2000));
+    if (!dryRun) {
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 
