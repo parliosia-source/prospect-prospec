@@ -20,7 +20,7 @@ Deno.serve(async (req) => {
   let all = [];
   let page = 0;
   while (true) {
-    const batch = await base44.asServiceRole.entities.KBEntityV2.list('-created_date', 500, page * 500).catch(() => []);
+    const batch = await base44.asServiceRole.entities.KBEntityV3.list('-created_date', 500, page * 500).catch(() => []);
     if (!batch || batch.length === 0) break;
     all = all.concat(batch);
     if (batch.length < 500) break;
@@ -32,10 +32,10 @@ Deno.serve(async (req) => {
   const sevenDaysAgo = now - 7 * 24 * 3600 * 1000;
 
   const coverage = ALL_SECTORS.map(sector => {
-    // GM = MTL or GM hqRegion
+    // GM = MTL_CMM geoScope or MTL/GM hqRegion
     const gmEntries = all.filter(e => {
       const secs = Array.isArray(e.industrySectors) ? e.industrySectors : [];
-      return secs.includes(sector) && (e.hqRegion === "MTL" || e.hqRegion === "GM");
+      return secs.includes(sector) && (e.geoScope === "MTL_CMM" || e.hqRegion === "MTL" || e.hqRegion === "GM");
     });
 
     const count = gmEntries.length;
@@ -75,7 +75,7 @@ Deno.serve(async (req) => {
     };
   });
 
-  const totalGM = all.filter(e => e.hqRegion === "MTL" || e.hqRegion === "GM").length;
+  const totalGM = all.filter(e => e.geoScope === "MTL_CMM" || e.hqRegion === "MTL" || e.hqRegion === "GM").length;
   const totalAll = all.length;
   const harvestEntries = all.filter(e => (e.qualityFlags || []).includes("WEB_HARVEST")).length;
 

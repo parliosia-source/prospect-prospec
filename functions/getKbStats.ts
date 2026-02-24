@@ -15,7 +15,7 @@ Deno.serve(async (req) => {
     const pageSize = 500;
     
     while (true) {
-      const batch = await base44.asServiceRole.entities.KBEntity.list(
+      const batch = await base44.asServiceRole.entities.KBEntityV3.list(
         '-updated_date',
         pageSize,
         page * pageSize

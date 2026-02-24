@@ -41,7 +41,7 @@ Deno.serve(async (req) => {
   let all = [];
   let page = 0;
   while (true) {
-    const batch = await base44.asServiceRole.entities.KBEntityV2.list('-confidenceScore', 500, page * 500).catch(() => []);
+    const batch = await base44.asServiceRole.entities.KBEntityV3.list('-confidenceScore', 500, page * 500).catch(() => []);
     if (!batch || batch.length === 0) break;
     all = all.concat(batch);
     if (batch.length < 500) break;
@@ -60,14 +60,22 @@ Deno.serve(async (req) => {
     return true;
   });
 
-  // Step 2: region filter
+  // Step 2: region filter (V3: use geoScope)
   for (const e of withFields) {
     let pass = true;
     let reason = null;
-    if (isMTL && !["MTL","GM"].includes(e.hqRegion)) {
-      pass = false; reason = `hqRegion=${e.hqRegion} (expected MTL or GM)`;
-    } else if (!isMTL && isQC && !["MTL","GM","QC_OTHER"].includes(e.hqRegion) && e.hqProvince !== "QC") {
-      pass = false; reason = `hqRegion=${e.hqRegion}, hqProvince=${e.hqProvince} (expected QC)`;
+    if (isMTL) {
+      if (e.geoScope && e.geoScope !== "UNKNOWN") {
+        if (e.geoScope !== "MTL_CMM") { pass = false; reason = `geoScope=${e.geoScope} (expected MTL_CMM)`; }
+      } else if (!["MTL","GM"].includes(e.hqRegion)) {
+        pass = false; reason = `hqRegion=${e.hqRegion} (expected MTL or GM)`;
+      }
+    } else if (!isMTL && isQC) {
+      if (e.geoScope && e.geoScope !== "UNKNOWN") {
+        if (!["MTL_CMM","QC_OTHER"].includes(e.geoScope)) { pass = false; reason = `geoScope=${e.geoScope} (expected MTL_CMM or QC_OTHER)`; }
+      } else if (!["MTL","GM","QC_OTHER"].includes(e.hqRegion) && e.hqProvince !== "QC") {
+        pass = false; reason = `hqRegion=${e.hqRegion}, hqProvince=${e.hqProvince} (expected QC)`;
+      }
     }
     if (pass) afterRegion.push(e);
     else rejectLog.region.push({ domain: e.domain, name: e.name, reason });

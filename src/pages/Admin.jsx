@@ -354,7 +354,7 @@ export default function Admin() {
           <div className="bg-white rounded-xl border p-5">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h3 className="font-semibold text-slate-800">Couverture KBEntityV2 par secteur (Grand Montréal)</h3>
+                <h3 className="font-semibold text-slate-800">Couverture KBEntityV3 par secteur (Grand Montréal)</h3>
                 <p className="text-xs text-slate-500 mt-0.5">Objectif: 150 entrées/secteur dans le Grand Montréal (hqRegion MTL ou GM)</p>
               </div>
               <Button onClick={handleCoverage} disabled={maintenanceLoading} size="sm" variant="outline" className="gap-2 text-xs">
@@ -389,8 +389,8 @@ export default function Admin() {
           <div className="bg-white rounded-xl border p-5">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h3 className="font-semibold text-slate-800">Harvest secteur → KBEntityV2</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Enrichit KBEntityV2 via Brave jusqu'à 150 entrées/secteur GM. Score minimum: 75.</p>
+                <h3 className="font-semibold text-slate-800">Harvest secteur → KBEntityV3</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Enrichit KBEntityV3 via Brave jusqu'à 150 entrées/secteur GM. Score minimum: 75.</p>
               </div>
               <div className="flex gap-2">
                 <Button onClick={() => handleHarvestSector(true)} disabled={harvestLoading} variant="outline" size="sm" className="gap-2 text-xs">
@@ -461,7 +461,7 @@ export default function Admin() {
           <div className="bg-white rounded-xl border p-5">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h3 className="font-semibold text-slate-800">Test Debug Search (KBEntityV2)</h3>
+                <h3 className="font-semibold text-slate-800">Test Debug Search (KBEntityV3)</h3>
                 <p className="text-xs text-slate-500 mt-0.5">Simule le filtrage KB sans lancer de campagne. Affiche top 20 acceptés / rejetés.</p>
               </div>
               <Button onClick={handleDebugSearch} disabled={debugLoading} size="sm" className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-xs">
@@ -530,7 +530,7 @@ export default function Admin() {
           <div className="bg-white rounded-xl border p-5">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h3 className="font-semibold text-slate-800">Stats Auto-Expansion KBEntityV2</h3>
+                <h3 className="font-semibold text-slate-800">Stats Auto-Expansion KBEntityV3</h3>
                 <p className="text-xs text-slate-500 mt-0.5">Distribution par sourceOrigin, secteur, et derniers ajouts WEB_TOPUP.</p>
               </div>
               <Button onClick={handleExpansionStats} disabled={maintenanceLoading} size="sm" variant="outline" className="gap-2 text-xs">
