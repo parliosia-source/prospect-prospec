@@ -288,15 +288,16 @@ Deno.serve(async (req) => {
     });
     console.log(`[KB] afterRegion=${kbRegionFiltered.length} geoScopes=${requiredGeoScopes.join(",")}`);
 
-    // Filter: sector — check industrySectors (primary), themes, primaryTheme, industryLabel
+    // Filter: sector — fuzzy match (accents/case/& normalization) across all sector fields
+    const normRequired = requiredSectors.map(normSector);
     const kbSectorFiltered = kbRegionFiltered.filter(e => {
       if (requiredSectors.length === 0) return true;
-      const sectors = parseArr(e.industrySectors);
-      const themes = parseArr(e.themes);
-      if (sectors.some(s => requiredSectors.includes(s))) return true;
-      if (themes.some(s => requiredSectors.includes(s))) return true;
-      if (requiredSectors.includes(e.primaryTheme)) return true;
-      if (requiredSectors.includes(e.industryLabel)) return true;
+      const sectors = parseArr(e.industrySectors).map(normSector);
+      const themes = parseArr(e.themes).map(normSector);
+      if (sectors.some(s => normRequired.includes(s))) return true;
+      if (themes.some(s => normRequired.includes(s))) return true;
+      if (normRequired.includes(normSector(e.primaryTheme))) return true;
+      if (normRequired.includes(normSector(e.industryLabel))) return true;
       return false;
     });
     console.log(`[KB] afterSector=${kbSectorFiltered.length}`);
