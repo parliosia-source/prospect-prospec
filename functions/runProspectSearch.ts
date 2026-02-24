@@ -463,10 +463,12 @@ Deno.serve(async (req) => {
 
   // ── Instrumentation counters ──────────────────────────────────────────────
   let matchByIndustrySectorsCount = 0, matchByThemesCount = 0, matchByPrimaryThemeCount = 0, matchByIndustryLabelCount = 0;
+  let kbMatchedByPrimarySector = 0, kbMatchedByDerivedSector = 0;
   let strictCount = 0, expandedCount = 0, rejectedCount = 0;
   let kbAfterMissingFields = 0;
   let webRejectedBlockedDomain = 0, webRejectedBlockedPathOrTitle = 0, webRejectedNoSectorMatch = 0;
   const topRejectReasons = {};
+  const derivedReasonsCounts = {};
   const sampleMatched = [];
   const rejectedSamples = [];
 
@@ -525,11 +527,15 @@ Deno.serve(async (req) => {
       const { matchedCanonical, whichMode } = fuzzyMatchSectors(e, requiredSectors);
       if (!whichMode) continue; // doesn't match at all
 
-      // Track match mode
+      // Track match mode & derived sector stats
       if (whichMode === "industrySectors") matchByIndustrySectorsCount++;
       else if (whichMode === "themes") matchByThemesCount++;
       else if (whichMode === "primaryTheme") matchByPrimaryThemeCount++;
       else if (whichMode === "industryLabel") matchByIndustryLabelCount++;
+      
+      // Track primary vs derived matches
+      if (whichMode === "PRIMARY_SECTOR") kbMatchedByPrimarySector++;
+      else if (whichMode === "DERIVED_SECTOR") kbMatchedByDerivedSector++;
 
       // Compute sector score for the first matched sector
       const targetSector = matchedCanonical[0] || requiredSectors[0];
@@ -800,6 +806,7 @@ Deno.serve(async (req) => {
       selectedCount: kbAccepted + webAccepted,
       // ── Sector matching detail ──
       matchByIndustrySectorsCount, matchByThemesCount, matchByPrimaryThemeCount, matchByIndustryLabelCount,
+      kbMatchedByPrimarySector, kbMatchedByDerivedSector,
       strictCount, expandedCount, rejectedCount,
       // ── Canonical vs free sectors ──
       requiredSectorsCanonical: requiredSectors,
@@ -807,6 +814,7 @@ Deno.serve(async (req) => {
       campaignKeywordsUsed: campaignKeywords,
       // ── Debug samples ──
       topRejectReasons,
+      derivedReasonsCounts,
       sampleMatched,
       rejectedSamples,
       stopReason: stopReason || (finalStatus === "DONE" ? "TARGET_REACHED" : "PARTIAL"),
