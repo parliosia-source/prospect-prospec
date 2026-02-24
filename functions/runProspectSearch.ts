@@ -122,7 +122,8 @@ function computeSectorScore(kb, sector) {
   }
 
   // Boost: themeConfidence
-  const tc = typeof kb.themeConfidence === "number" ? kb.themeConfidence : (parseFloat(kb.themeConfidence) || 0.55);
+  let tcRaw = typeof kb.themeConfidence === "number" ? kb.themeConfidence : (parseFloat(kb.themeConfidence) || 55);
+  const tc = tcRaw > 1 ? tcRaw / 100 : tcRaw;
   if (tc >= 0.8) { score = Math.min(100, score + 5); reasons.push("highThemeConfidence"); }
 
   const tier = score >= 70 ? "STRICT" : score >= 55 ? "EXPANDED" : "REJECTED";
@@ -476,8 +477,9 @@ Deno.serve(async (req) => {
     function rankScore(e, sectorScore) {
       let score = sectorScore * 10; // base from sector score
       if (normRequired.includes(normSector(e.primaryTheme))) score += 1000;
-      const tc = typeof e.themeConfidence === "number" ? e.themeConfidence : (parseFloat(e.themeConfidence) || 0.55);
-      score += tc * 100;
+      let tcRaw2 = typeof e.themeConfidence === "number" ? e.themeConfidence : (parseFloat(e.themeConfidence) || 55);
+      const tcNorm = tcRaw2 > 1 ? tcRaw2 / 100 : tcRaw2;
+      score += tcNorm * 100;
       if (parseArr(e.eventSignals).length > 0) score += 10;
       score += (e.confidenceScore || 70) * 0.2;
       return score;
