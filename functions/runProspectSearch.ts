@@ -790,6 +790,9 @@ Deno.serve(async (req) => {
       braveRequests,
       braveQuotaExceeded: braveRL.quotaExceeded,
       brave429Count: braveRL.count429,
+      // ── Retry stats ──
+      createRetryCount: retryStats.createRetryCount,
+      rateLimitHitCount: retryStats.rateLimitHitCount,
       // ── Totals ──
       finalProspectCount,
       selectedCount: kbAccepted + webAccepted,
