@@ -71,145 +71,138 @@ function resolveGeo(e) {
 }
 
 // ── SECTOR SCORING RULES (exhaustive, 10 UI sectors, FR/EN Québec) ─────────────
-// strongSignals: boost, exclusions: hard reject (entity tagged to wrong sector)
+// EXCLUSIONS: only hard-reject signals that are unambiguous (e.g. "cegep" in Finance).
+// Keep exclusion lists minimal and specific — cross-sector exclusions create false negatives.
 const SECTOR_RULES = {
   "Finance & Assurance": {
     strongSignals: [
-      "banque","caisse","credit union","institution financiere","desjardins","bnc","bnp","rbc","td bank","cibc","bmo","scotiabank",
-      "assurance","insurance","courtier","broker","mutuelle","mga","underwriting","reassurance","souscripteur",
-      "investissement","gestion d actifs","asset management","capital","fonds","fonds de placement","private equity","venture capital","vc",
-      "paiement","payment","psp","acquiring","merchant services","fintech","neobanque","neobank",
-      "bourse","valeurs mobilieres","securities","fiducie","trust","mortgage","hypotheque","preteur","lender",
-      "actuariat","actuarial","souscription","planificateur financier","conseiller financier",
-      "caisses populaires","desjardins","lauzeault","industrielle alliance","ia financiere","la capitale","sun life","manuvie","manulife",
+      "banque","caisse","credit union","institution financiere","desjardins","bnc","rbc","td bank","cibc","bmo","scotiabank",
+      "assurance","insurance","courtier en assurance","mutuelle","mga","underwriting","reassurance","souscripteur",
+      "investissement","gestion d actifs","asset management","capital risque","fonds de placement","private equity","venture capital",
+      "paiement","payment","fintech","neobanque","neobank","services financiers","financial services",
+      "bourse","valeurs mobilieres","securities","fiducie","trust","hypotheque","preteur","lender",
+      "actuariat","planificateur financier","conseiller financier","industrielle alliance","ia financiere","la capitale","sun life","manulife",
     ],
+    // Only exclude entities whose NAME/notes clearly place them outside finance
     exclusions: [
-      "fondation","foundation","hopital","chu","cusm","chum","hospital","centre hospitalier",
-      "universite","cegep","college","ecole secondaire","ecole primaire","campus","etablissement scolaire",
-      "festival","tourisme","tourism","musee","galerie d art",
-      "ville de","municipalite","arrondissement","gouvernement","ministere","ciusss","cisss","saq","stm","rcm",
+      "hopital","chu","cusm","chum","centre hospitalier",
+      "cegep","universite","ecole secondaire","ecole primaire",
+      "ville de","municipalite","ministere","ciusss","cisss",
     ],
   },
   "Technologie": {
     strongSignals: [
-      "logiciel","software","saas","cloud","informatique","it","intelligence artificielle","ia","ai","ml","machine learning",
-      "cybersecurite","donnees","data","developpement web","startup tech","plateforme numerique","erp","crm",
-      "devops","infrastructure ti","api","application mobile","solution numerique","hebergement","hosting",
-      "reseau","network","telecom it","integateur","integrateur","editeur logiciel","isvt","tech","fintech","medtech","edtech",
-      "blockchain","cloud computing","big data","analytics","bi","business intelligence","rpa","automatisation",
+      "logiciel","software","saas","cloud computing","informatique","intelligence artificielle","ia","machine learning",
+      "cybersecurite","developpement web","application mobile","hebergement","devops","infrastructure ti",
+      "integateur ti","editeur logiciel","erp","crm","plateforme numerique","solution numerique",
+      "blockchain","big data","analytics","business intelligence","rpa","automatisation intelligente",
     ],
     exclusions: [
-      "hopital","centre hospitalier","universite","cegep","college","ecole",
-      "fondation","gouvernement","municipalite","ville de","ministere","ciusss","cisss",
-      "immobilier","real estate","restaurant","boutique","epicerie",
+      "hopital","chu","centre hospitalier",
+      "cegep","universite",
+      "ville de","ministere",
     ],
   },
   "Santé & Pharma": {
     strongSignals: [
-      "sante","health","pharma","pharmaceutique","medicament","drug","clinique","clinic","medecin","docteur","doctor",
-      "hopital","hospital","chu","chum","cusm","cisss","ciusss","centre hospitalier","soins","care",
-      "diagnostic","therapeutique","therapy","laboratoire de sante","labo","biotech","biotechnologie",
-      "dentiste","dentisterie","dental","optometrie","optometrist","physiotherapie","physiotherapy","chiro",
-      "infirmier","infirmiere","pharmacie","pharmacy","ordonnance","equipement medical","medical devices",
-      "chirurgie","urgence","soins longue duree","sld","clsc","gmf","groupe medecin","specialist",
+      "sante","health","pharma","pharmaceutique","medicament","clinique","clinic","medecin","docteur",
+      "hopital","hospital","chu","chum","cusm","cisss","ciusss","centre hospitalier","soins de sante",
+      "diagnostic","therapeutique","biotech","biotechnologie",
+      "dentiste","optometrie","physiotherapie","chiro","osteo",
+      "infirmier","pharmacie","equipement medical","medical devices",
+      "chirurgie","soins longue duree","clsc","gmf","groupe medecin",
     ],
     exclusions: [
-      "fondation","universite","cegep","college","ecole","gouvernement","municipalite",
-      "festival","tourisme","immobilier","technologie","logiciel","saas",
+      "ville de","ministere",
     ],
   },
   "Gouvernement & Public": {
     strongSignals: [
-      "gouvernement","government","municipalite","ville de","arrondissement","province","federal","federal","ministere",
-      "assemblee nationale","parlement","parliament","agence gouvernementale","societe d etat","crown corporation",
-      "ciusss","cisss","saq","sto","stm","rtc","remq","societe de transport","caisse depot","cdpq",
-      "commission scolaire","css","csp","regie","tribunal","cour","chambre des communes","senat",
+      "gouvernement","government","municipalite","ville de","arrondissement","ministere",
+      "assemblee nationale","parlement","agence gouvernementale","societe d etat","crown corporation",
+      "ciusss","cisss","saq","stm","rtc","remq","societe de transport en commun","caisse depot","cdpq",
+      "commission scolaire","regie","tribunal","chambre des communes","senat",
     ],
-    exclusions: [
-      "fondation privee","startup","venture","banque privee","assurance privee",
-    ],
+    exclusions: [], // broad sector — no hard exclusions
   },
   "Éducation & Formation": {
     strongSignals: [
-      "universite","university","college","cegep","ecole","school","formation","training","apprentissage","learning",
-      "cours","curriculum","programme","diplome","certificat","mba","bac","maitrise","doctorat","phd",
-      "pedagogie","didactique","enseignant","professeur","educateur","tuteur","e-learning","mooc",
-      "commission scolaire","css","etablissement d enseignement","centre de formation","cfp","cfpa",
-      "hec","polytechnique","uqam","udem","mcgill","concordia","ets","ulaval","sherbrooke","uqtr","uqac",
+      "universite","university","cegep","ecole superieure","grande ecole","formation professionnelle","centre de formation",
+      "apprentissage","e-learning","mooc","pedagogie","didactique","enseignant","professeur","educateur",
+      "diplome","certificat","mba","maitrise","doctorat","programme d etudes",
+      "hec","polytechnique","uqam","udem","mcgill","concordia","ets","ulaval","sherbrooke","uqtr","uqac","inrs",
     ],
     exclusions: [
-      "fondation privee","gouvernement","municipalite","hopital","banque","assurance",
+      "banque","assurance",
     ],
   },
   "Associations & OBNL": {
     strongSignals: [
-      "association","obnl","npo","nonprofit","non-profit","fondation","foundation","organisme","charitable","charite",
-      "benevole","volunteer","ong","ngo","syndicat","union","federation","regroupement","coalition","collectif",
-      "communautaire","community","ordre professionnel","chambre de commerce","board","conseil","comite",
-      "aide humanitaire","entraide","soutien social","inclusion","mission sociale","but non lucratif",
+      "association","obnl","npo","nonprofit","non-profit","fondation","organisme sans but lucratif","charitable",
+      "benevole","volunteer","ong","syndicat","federation","regroupement","coalition","collectif",
+      "communautaire","ordre professionnel","chambre de commerce","mission sociale","but non lucratif",
+      "aide humanitaire","entraide","soutien social","inclusion sociale",
     ],
-    exclusions: [
-      "banque","assurance","logiciel","saas","promoteur immobilier","manufacture","usine",
-    ],
+    exclusions: [], // minimal — foundations can coexist with other sectors
   },
   "Immobilier": {
     strongSignals: [
-      "immobilier","real estate","promoteur","developpeur immobilier","constructeur","courtier immobilier",
-      "gestion immobiliere","property management","reit","fonds immobilier","condo","logement","appartement",
-      "maison","bungalow","copropriete","syndic","gestionnaire d immeuble","locatif","locataire","loyer",
-      "renovation","construction residentielle","construction commerciale","terrain","lot","subdivision",
-      "hypotheque","mortgage","financement immobilier","reassurance immobiliere","estimation","evaluation",
+      "immobilier","real estate","promoteur immobilier","developpeur immobilier","courtier immobilier",
+      "gestion immobiliere","property management","reit","fonds immobilier","condo","logement locatif",
+      "copropriete","syndic de copropriete","gestionnaire d immeuble","renovation residentielle",
+      "construction residentielle","construction commerciale","terrain a vendre","subdivision",
+      "hypotheque","financement immobilier","estimation immobiliere","evaluation immobiliere",
       "remax","via capitale","royal lepage","century 21","sutton","proprio direct",
     ],
     exclusions: [
-      "hopital","universite","cegep","fondation","gouvernement","municipalite",
-      "logiciel","saas","tech","informatique",
+      "hopital","chu","cegep","universite",
     ],
   },
   "Droit & Comptabilité": {
     strongSignals: [
       "avocat","cabinet d avocats","law firm","barreau","notaire","huissier","juriste","conseiller juridique",
-      "comptable","cpa","audit","auditeur","fiscalite","conformite","cabinet comptable","expertise comptable",
-      "juridique","litige","contentieux","restructuration","insolvabilite","faillite","mediation","arbitrage",
-      "paralegal","clerc","greffier","registraire","droit des affaires","droit corporatif","droit fiscal",
+      "comptable","cpa","audit","fiscalite","conformite","cabinet comptable","expertise comptable",
+      "litige","contentieux","restructuration","insolvabilite","faillite","mediation","arbitrage",
+      "droit des affaires","droit corporatif","droit fiscal","droit immobilier","droit du travail",
     ],
     exclusions: [
-      "hopital","universite","fondation","gouvernement","municipalite","logiciel","saas","usine",
+      "hopital","chu","cegep","universite",
     ],
   },
   "Industrie & Manufacture": {
     strongSignals: [
-      "usine","manufacture","fabrication","production","industrie","acier","aluminium","chimie","chimique",
-      "mecanique","automatisation","assemblage","machinerie","ingenierie industrielle","oem","sous-traitance industrielle",
+      "usine","manufacture","fabrication industrielle","production industrielle","acier","aluminium","chimie industrielle",
+      "mecanique industrielle","automatisation industrielle","assemblage","machinerie","ingenierie industrielle",
       "aerospatiale","aeronautique","defense","plastique","caoutchouc","emballage","packaging","imprimerie",
-      "textile","papier","carton","bois","scierie","menuiserie","metallurgie","soudure","fonderie",
-      "equipementier","composantes","electronique","pcb","semi-conducteur","systemes embarques",
+      "textile","papier","metallurgie","soudure","fonderie",
+      "equipementier","electronique industrielle","semi-conducteur","systemes embarques",
     ],
     exclusions: [
-      "hopital","universite","fondation","gouvernement","commerce de detail","boutique","restaurant",
+      "hopital","chu","universite","cegep",
     ],
   },
   "Commerce de détail": {
     strongSignals: [
-      "commerce","retail","detaillant","magasin","boutique","vente au detail","epicerie","supermarche","alimentation",
-      "franchise","franchiseur","franchisee","e-commerce","commerce electronique","mode","vetement","chaussure",
-      "quincaillerie","bricolage","electronique grand public","librairie","pharmacie de detail","depanneur",
-      "restaurant","cafe","bar","brasserie","pizzeria","traiteur","livraison repas","fast food","qsr",
+      "commerce de detail","retail","detaillant","magasin","boutique","vente au detail","epicerie","supermarche",
+      "franchise","e-commerce","commerce electronique","mode","vetement","chaussure",
+      "quincaillerie","bricolage","librairie","pharmacie de detail","depanneur",
+      "restaurant","cafe","bar","brasserie","traiteur","livraison repas","fast food","restauration",
     ],
     exclusions: [
-      "hopital","universite","fondation","gouvernement","logiciel","saas",
+      "hopital","chu","universite","cegep","gouvernement","ministere",
     ],
   },
   "Transport & Logistique": {
     strongSignals: [
-      "transport","logistique","livraison","cargo","fret","entrepot","courrier","distribution","supply chain",
-      "camionnage","expediteur","freight","3pl","4pl","transitaire","douane","maritime","aerien","ferroviaire",
-      "camion","camionnette","messagerie","colis","parcel","stockage","manutention","palettisation","chargeur",
-      "stm","rtc","remq","sto","societe de transport","autobus","metro","train","transport en commun",
-      "taxis","covoiturage","flotte","gestion flotte","fleet","drone livraison",
+      "transport de marchandises","logistique","livraison","cargo","fret","entrepot","courrier","distribution",
+      "supply chain","camionnage","expediteur","freight","3pl","4pl","transitaire","douane",
+      "transport maritime","transport aerien","transport ferroviaire",
+      "messagerie","colis","stockage","manutention","chargeur",
+      "stm","rtc","remq","societe de transport en commun","autobus","metro","transport en commun",
+      "covoiturage","gestion flotte","fleet management",
     ],
     exclusions: [
-      "hopital","universite","fondation","gouvernement","logiciel","saas",
+      "hopital","chu","universite","cegep",
     ],
   },
 };
