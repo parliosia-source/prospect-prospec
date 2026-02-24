@@ -223,10 +223,10 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Throttle between batches — longer on creates to avoid 429
+    // Throttle between batches — longer to avoid 429
     if (!dryRun && i + batchSize < rows.length) {
-      const hasError = errorList.length > 0;
-      await new Promise(r => setTimeout(r, hasError ? 5000 : 1200));
+      const hasError = errorList.some(e => e.error?.includes("Rate limit"));
+      await new Promise(r => setTimeout(r, hasError ? 6000 : 2000));
     }
 
     if (i % (batchSize * 10) === 0) {
