@@ -406,7 +406,7 @@ Deno.serve(async (req) => {
     let kbAll = [];
     let page = 0;
     while (Date.now() - START < MAX_MS * 0.4) {
-      const batch = await base44.asServiceRole.entities.KBEntityV2.list('-confidenceScore', 500, page * 500).catch(() => []);
+      const batch = await base44.asServiceRole.entities.KBEntityV3.list('-confidenceScore', 500, page * 500).catch(() => []);
       if (!batch || batch.length === 0) break;
       kbAll = kbAll.concat(batch);
       if (batch.length < 500) break;
