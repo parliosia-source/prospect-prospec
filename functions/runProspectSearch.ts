@@ -602,8 +602,7 @@ Deno.serve(async (req) => {
         for (const r of results) {
           if (prospectCount >= targetCount) break;
           const norm = normalizeWebResult(r, requiredSectors, isMTL);
-          if (!norm) continue;
-          if (norm.rejectReason) {
+          if (!norm.accepted) {
             if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
             else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
             else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
@@ -686,8 +685,7 @@ Deno.serve(async (req) => {
         for (const r of results) {
           if (prospectCount >= targetCount) break;
           const norm = normalizeWebResult(r, requiredSectors, isMTL);
-          if (!norm) continue;
-          if (norm.rejectReason) {
+          if (!norm.accepted) {
             if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
             else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
             else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
