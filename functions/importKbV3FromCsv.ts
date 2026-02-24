@@ -63,7 +63,7 @@ function buildKbRecord(headers, values) {
     const val = values[i] || "";
     if (!key) continue;
 
-    if (["industrySectors", "themes", "keywords", "tags", "synonyms", "sectorSynonymsUsed", "eventSignals"].includes(key)) {
+    if (["industrySectors", "themes", "keywords", "tags", "synonyms", "sectorSynonymsUsed", "eventSignals", "qualityFlags"].includes(key)) {
       record[key] = parseArr(val);
     } else if (["themeConfidence", "confidenceScore"].includes(key)) {
       record[key] = parseNumber(val);
@@ -129,15 +129,28 @@ Deno.serve(async (req) => {
           // Check for existing by domain
           const existing = await base44.asServiceRole.entities.KBEntityV3.filter({ domain: domNorm }).catch(() => []);
           
-          if (existing.length > 0) {
-            // Update
-            await base44.asServiceRole.entities.KBEntityV3.update(existing[0].id, record);
-            updated++;
-          } else {
-            // Create
-            await base44.asServiceRole.entities.KBEntityV3.create(record);
-            created++;
-            existingDomains.add(domNorm);
+          // Retry logic for rate limits
+          let success = false;
+          for (let attempt = 0; attempt < 5 && !success; attempt++) {
+            try {
+              if (existing.length > 0) {
+                // Update
+                await base44.asServiceRole.entities.KBEntityV3.update(existing[0].id, record);
+                updated++;
+              } else {
+                // Create
+                await base44.asServiceRole.entities.KBEntityV3.create(record);
+                created++;
+                existingDomains.add(domNorm);
+              }
+              success = true;
+            } catch (retryErr) {
+              const isRateLimit = retryErr.status === 429 || (retryErr.message || "").toLowerCase().includes("rate limit");
+              if (!isRateLimit || attempt === 4) throw retryErr;
+              // Exponential backoff
+              const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+              await new Promise(r => setTimeout(r, delay));
+            }
           }
 
           if (samples.length < 5) {
