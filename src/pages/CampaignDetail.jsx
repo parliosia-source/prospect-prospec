@@ -3,6 +3,36 @@ import { base44 } from "@/api/base44Client";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { ArrowLeft, Brain, ExternalLink, Building2, MapPin, ChevronRight, RefreshCw, Clock, Trash2, AlertCircle } from "lucide-react";
+
+// ── Display helpers ──────────────────────────────────────────────────────────
+function cleanCompanyName(name) {
+  if (!name) return "";
+  if (name.length > 80 || /Headquartered|Développe|Founded in|Basée à|spécialisée dans/i.test(name)) {
+    const short = name.split(/[,\-–—|]/).map(s => s.trim())[0] || name;
+    return short.length > 80 ? short.slice(0, 77) + "…" : short;
+  }
+  return name;
+}
+
+function normalizeWebsite(website, domain) {
+  if (!website && !domain) return "";
+  let url = website || `https://${domain}`;
+  if (!url.startsWith("http")) url = "https://" + url;
+  // Fix double-domain concat
+  if (domain) {
+    const idx = url.indexOf(domain);
+    if (idx >= 0) {
+      const rest = url.slice(idx + domain.length);
+      if (rest.includes(domain)) url = url.slice(0, idx + domain.length);
+    }
+  }
+  return url;
+}
+
+function displayDomain(domain) {
+  if (!domain) return "";
+  return domain.replace(/^(https?:\/\/)?(www\.)?/i, "").replace(/\/+$/, "");
+}
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/shared/StatusBadge";
 import {
@@ -76,7 +106,7 @@ export default function CampaignDetail() {
 
   const handleAnalyze = async (prospect) => {
     setAnalyzingIds(s => new Set([...s, prospect.id]));
-    await base44.functions.invoke("analyzeProspect", { prospectId: prospect.id });
+    await base44.functions.invoke("analyzeProspectV2", { prospectId: prospect.id });
     await loadAll();
     setAnalyzingIds(s => { const n = new Set(s); n.delete(prospect.id); return n; });
   };
@@ -338,8 +368,8 @@ export default function CampaignDetail() {
         ))}
       </div>
 
-      {/* Admin debug summary */}
-      {campaign?.lastRunDebugSummary && (
+      {/* Admin debug summary — only visible to admins */}
+      {campaign?.lastRunDebugSummary && user?.role === "admin" && (
         <div className="mb-3 px-3 py-2 bg-slate-800 text-slate-300 rounded-lg text-xs font-mono flex items-start gap-2">
           <span className="text-slate-500 shrink-0">[debug]</span>
           <span>{campaign.lastRunDebugSummary}</span>
@@ -417,11 +447,11 @@ export default function CampaignDetail() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
-                        <span className="font-medium text-slate-800">{p.companyName}</span>
+                        <span className="font-medium text-slate-800">{cleanCompanyName(p.companyName)}</span>
                       </div>
-                      <a href={p.website} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                      <a href={normalizeWebsite(p.website, p.domain)} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
                         className="text-xs text-blue-500 hover:underline flex items-center gap-0.5">
-                        {p.domain} <ExternalLink className="w-2.5 h-2.5" />
+                        {displayDomain(p.domain)} <ExternalLink className="w-2.5 h-2.5" />
                       </a>
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-500">
