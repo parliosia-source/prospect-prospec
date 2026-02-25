@@ -13,6 +13,16 @@ import StatusBadge from "@/components/shared/StatusBadge";
 import MessageComposer from "@/components/messages/MessageComposer";
 import { toast } from "sonner";
 
+function safeFullName(c) {
+  const name = [c.firstName, c.lastName].filter(Boolean).join(" ").trim();
+  return name && name !== "null" && name !== "undefined" ? name : (c.fullName && c.fullName !== "null" ? c.fullName : "");
+}
+
+function isValidLinkedIn(url) {
+  if (!url) return false;
+  return url.includes("linkedin.com/in/") && !url.endsWith("/contact") && !url.endsWith("/contact/");
+}
+
 const ACTION_LABELS = { FOLLOW_UP_J7: "Relance J+7", FOLLOW_UP_J14: "Relance J+14", CALL: "Appel", SEND_MESSAGE: "Message", CUSTOM: "Action" };
 
 export default function LeadDetail() {
@@ -202,14 +212,17 @@ export default function LeadDetail() {
         {/* Contacts */}
         {contacts.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
-            {contacts.map(c => (
-              <div key={c.id} className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border text-xs">
-                <User className="w-3.5 h-3.5 text-slate-400" />
-                <span className="font-medium">{c.fullName || `${c.firstName || ""} ${c.lastName || ""}`.trim()}</span>
-                {c.title && <span className="text-slate-400">· {c.title}</span>}
-                {c.email && <span className="text-blue-600">{c.email}</span>}
-              </div>
-            ))}
+            {contacts.map(c => {
+              const name = safeFullName(c);
+              return (
+                <div key={c.id} className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border text-xs">
+                  <User className="w-3.5 h-3.5 text-slate-400" />
+                  <span className="font-medium">{name || (c.title ? c.title : "Contact non identifié")}</span>
+                  {name && c.title && <span className="text-slate-400">· {c.title}</span>}
+                  {c.email && <span className="text-blue-600">{c.email}</span>}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -239,11 +252,11 @@ export default function LeadDetail() {
             <Select value={selectedContactId} onValueChange={setSelectedContactId}>
               <SelectTrigger className="w-48"><SelectValue placeholder="Contact…" /></SelectTrigger>
               <SelectContent>
-                {contacts.map(c => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.fullName || `${c.firstName} ${c.lastName}`.trim()}
-                  </SelectItem>
-                ))}
+                {contacts.map(c => {
+                  const name = safeFullName(c);
+                  const label = name ? `${name} — ${c.title || ""}` : (c.title || "Contact non identifié");
+                  return <SelectItem key={c.id} value={c.id}>{label}</SelectItem>;
+                })}
               </SelectContent>
             </Select>
           )}
