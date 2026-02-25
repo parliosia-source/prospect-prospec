@@ -57,7 +57,7 @@ Segment: ${segment}
 Raisons: ${(prospect?.relevanceReasons || []).join("; ")}
 Opportunités: ${(prospect?.opportunities || []).map(o => o.label).join("; ")}
 Approche recommandée: ${prospect?.recommendedApproach || ""}
-Contact: ${firstName}${contact?.title ? `, ${contact.title}` : ""}${contact?.email ? `, ${contact.email}` : ""}
+Contact: ${firstName || "Responsable"}${contact?.title ? `, ${contact.title}` : ""}${contact?.email ? `, ${contact.email}` : ""}
 Canal: ${channel}
 Type message: ${templateType}
 `;
@@ -68,7 +68,7 @@ ${template.body}` : "";
 
   const result = await callOpenAI([
     { role: "system", content: systemPrompt },
-    { role: "user", content: `Génère un message personnalisé pour ce prospect.\n\n${context}\n${templateContext}\n\nNom expéditeur: ${senderName}\nPrénom contact: ${firstName}` }
+    { role: "user", content: `Génère un message personnalisé pour ce prospect.\n\n${context}\n${templateContext}\n\nNom expéditeur: ${senderName}\nPrénom contact: ${firstName || "Responsable"}` }
   ]);
 
   // Replace template variables
