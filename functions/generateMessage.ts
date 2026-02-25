@@ -37,7 +37,8 @@ Deno.serve(async (req) => {
     || templates[0];
 
   const senderName = user.full_name || user.email.split("@")[0];
-  const firstName = contact?.firstName || "Madame/Monsieur";
+  const contactName = [contact?.firstName, contact?.lastName].filter(Boolean).join(" ").trim();
+  const firstName = (contactName && contactName !== "null") ? contactName.split(" ")[0] : (contact?.title ? "" : "Madame/Monsieur");
 
   const systemPrompt = `Tu es ${senderName}, représentant(e) de SYNC Productions à Montréal.
 SYNC = partenaire audiovisuel pour événements corporatifs (son, éclairage, captation, webdiffusion/hybride).

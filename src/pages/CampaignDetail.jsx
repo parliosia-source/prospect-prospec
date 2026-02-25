@@ -3,6 +3,17 @@ import { base44 } from "@/api/base44Client";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { ArrowLeft, Brain, ExternalLink, Building2, MapPin, ChevronRight, RefreshCw, Clock, Trash2, AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import StatusBadge from "@/components/shared/StatusBadge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 // ── Display helpers ──────────────────────────────────────────────────────────
 function cleanCompanyName(name) {
@@ -18,7 +29,6 @@ function normalizeWebsite(website, domain) {
   if (!website && !domain) return "";
   let url = website || `https://${domain}`;
   if (!url.startsWith("http")) url = "https://" + url;
-  // Fix double-domain concat
   if (domain) {
     const idx = url.indexOf(domain);
     if (idx >= 0) {
@@ -33,17 +43,6 @@ function displayDomain(domain) {
   if (!domain) return "";
   return domain.replace(/^(https?:\/\/)?(www\.)?/i, "").replace(/\/+$/, "");
 }
-import { Button } from "@/components/ui/button";
-import StatusBadge from "@/components/shared/StatusBadge";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 
 const TABS = ["Tous", "NOUVEAU", "ANALYSÉ", "QUALIFIÉ", "REJETÉ", "EXPORTÉ"];
 const TAB_LABELS = { "Tous": "Tous", "NOUVEAU": "Nouveaux", "ANALYSÉ": "Analysés", "QUALIFIÉ": "Qualifiés", "REJETÉ": "Rejetés", "EXPORTÉ": "Exportés" };
@@ -52,6 +51,7 @@ export default function CampaignDetail() {
   const params = new URLSearchParams(window.location.search);
   const campaignId = params.get("id");
 
+  const [user, setUser] = useState(null);
   const [campaign, setCampaign] = useState(null);
   const [prospects, setProspects] = useState([]);
   const [activeTab, setActiveTab] = useState("Tous");
@@ -66,6 +66,10 @@ export default function CampaignDetail() {
   const [selectedIds, setSelectedIds] = useState(new Set());
 
   const pollRef = useRef(null);
+
+  useEffect(() => {
+    base44.auth.me().then(setUser).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!campaignId) return;
