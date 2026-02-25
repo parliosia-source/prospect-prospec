@@ -12,6 +12,47 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import StatusBadge from "@/components/shared/StatusBadge";
 import MessageComposer from "@/components/messages/MessageComposer";
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function safeFullName(c) {
+  const name = [c.firstName, c.lastName].filter(Boolean).join(" ").trim();
+  return name && name !== "null" && name !== "undefined" ? name : (c.fullName && c.fullName !== "null" ? c.fullName : "");
+}
+
+function isValidLinkedIn(url) {
+  if (!url) return false;
+  return url.includes("linkedin.com/in/") && !url.endsWith("/contact") && !url.endsWith("/contact/");
+}
+
+function cleanCompanyName(name) {
+  if (!name) return "";
+  if (name.length > 80 || /Headquartered|Développe|Founded in|Basée à|spécialisée dans/i.test(name)) {
+    const short = name.split(/[,\-–—|]/).map(s => s.trim())[0] || name;
+    return short.length > 80 ? short.slice(0, 77) + "…" : short;
+  }
+  return name;
+}
+
+function normalizeWebsite(website, domain) {
+  if (!website && !domain) return "";
+  let url = website || `https://${domain}`;
+  url = url.replace(/^(https?:\/\/)?(www\.)?/i, "https://");
+  if (!url.startsWith("http")) url = "https://" + url;
+  // Fix double-domain concat: if domain appears twice, trim
+  if (domain) {
+    const idx = url.indexOf(domain);
+    if (idx >= 0) {
+      const rest = url.slice(idx + domain.length);
+      if (rest.includes(domain)) url = url.slice(0, idx + domain.length);
+    }
+  }
+  return url;
+}
+
+function displayDomain(domain) {
+  if (!domain) return "";
+  return domain.replace(/^(https?:\/\/)?(www\.)?/i, "").replace(/\/+$/, "");
+}
+
 export default function ProspectDetail() {
   const params = new URLSearchParams(window.location.search);
   const prospectId = params.get("id");
@@ -118,7 +159,7 @@ export default function ProspectDetail() {
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-3 flex-wrap">
-              <h1 className="text-xl font-bold text-slate-900">{prospect.companyName}</h1>
+              <h1 className="text-xl font-bold text-slate-900">{cleanCompanyName(prospect.companyName)}</h1>
               <StatusBadge status={prospect.status} />
               {prospect.segment && (
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${prospect.segment === "HOT" ? "bg-orange-100 text-orange-700" : "bg-slate-100 text-slate-600"}`}>
@@ -132,8 +173,8 @@ export default function ProspectDetail() {
               )}
             </div>
             <div className="flex items-center gap-3 mt-2 text-sm text-slate-500 flex-wrap">
-              <a href={prospect.website} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-500 hover:underline">
-                <Globe className="w-3.5 h-3.5" />{prospect.website}
+              <a href={normalizeWebsite(prospect.website, prospect.domain)} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-500 hover:underline">
+                <Globe className="w-3.5 h-3.5" />{displayDomain(prospect.domain) || prospect.website}
               </a>
               {prospect.industry && <span>{prospect.industry}</span>}
               {prospect.location?.city && <span>📍 {prospect.location.city}{prospect.location.region ? `, ${prospect.location.region}` : ""}</span>}
@@ -245,37 +286,43 @@ export default function ProspectDetail() {
         </h3>
         {contacts.length === 0 ? (
           <p className="text-sm text-slate-400 italic">
-            {prospect.status === "NOUVEAU" ? "Lancez l'analyse pour identifier les décideurs." : "Aucun décideur trouvé pour ce prospect."}
+            {prospect.status === "NOUVEAU" ? "Lancez l'analyse pour identifier les décideurs." : "Aucun contact identifié pour ce prospect."}
           </p>
         ) : (
           <div className="space-y-2">
-            {contacts.map(c => (
-              <div key={c.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div>
-                  <div className="text-sm font-medium text-slate-800">{c.fullName || `${c.firstName || ""} ${c.lastName || ""}`.trim()}</div>
-                  <div className="text-xs text-slate-500">{c.title}</div>
-                  {c.email && <div className="text-xs text-blue-600 mt-0.5">{c.email} {c.emailConfidence ? `(${c.emailConfidence}%)` : ""}</div>}
+            {contacts.map(c => {
+              const name = safeFullName(c);
+              const showLinkedin = isValidLinkedIn(c.linkedinUrl);
+              return (
+                <div key={c.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                  <div>
+                    <div className="text-sm font-medium text-slate-800">
+                      {name || (c.title ? c.title : "Contact non identifié")}
+                    </div>
+                    {name && c.title && <div className="text-xs text-slate-500">{c.title}</div>}
+                    {c.email && <div className="text-xs text-blue-600 mt-0.5">{c.email} {c.emailConfidence ? `(${c.emailConfidence}%)` : ""}</div>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {showLinkedin && (
+                      <a
+                        href={c.linkedinUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-medium bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700 transition-colors"
+                      >
+                        <svg className="w-3 h-3 fill-white" viewBox="0 0 24 24"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+                        LinkedIn
+                      </a>
+                    )}
+                    {c.contactPageUrl && !c.contactPageUrl.includes(c.linkedinUrl || "__none__") && (
+                      <a href={c.contactPageUrl} target="_blank" rel="noreferrer" className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1">
+                        Page contact <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {c.linkedinUrl && (
-                    <a
-                      href={c.linkedinUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-medium bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700 transition-colors"
-                    >
-                      <svg className="w-3 h-3 fill-white" viewBox="0 0 24 24"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
-                      LinkedIn
-                    </a>
-                  )}
-                  {c.contactPageUrl && (
-                    <a href={c.contactPageUrl} target="_blank" rel="noreferrer" className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1">
-                      Page contact <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -305,11 +352,13 @@ export default function ProspectDetail() {
             <Select value={selectedContactId} onValueChange={setSelectedContactId}>
               <SelectTrigger className="w-48"><SelectValue placeholder="Choisir contact" /></SelectTrigger>
               <SelectContent>
-                {contacts.map(c => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.fullName || `${c.firstName} ${c.lastName}`.trim()} — {c.title}
-                  </SelectItem>
-                ))}
+                {contacts.map(c => {
+                  const name = safeFullName(c);
+                  const label = name ? `${name} — ${c.title || ""}` : (c.title || "Contact non identifié");
+                  return (
+                    <SelectItem key={c.id} value={c.id}>{label}</SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           )}
