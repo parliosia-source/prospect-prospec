@@ -817,7 +817,7 @@ Deno.serve(async (req) => {
       derivedReasonsCounts,
       sampleMatched,
       rejectedSamples,
-      stopReason: stopReason || (finalStatus === "DONE" ? "TARGET_REACHED" : "PARTIAL"),
+      stopReason: stopReason || (finalStatus === "COMPLETED" ? "TARGET_REACHED" : "PARTIAL"),
       isMTL, targetProvince,
       lastRunDebugSummary,
     };

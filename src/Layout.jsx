@@ -4,6 +4,7 @@ import { createPageUrl } from "@/utils";
 import { base44 } from "@/api/base44Client";
 import { LayoutDashboard, Search, Target, Bot, Settings, LogOut, ChevronLeft, ChevronRight, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Toaster } from "@/components/ui/sonner";
 
 const NAV = [
   { label: "Dashboard", page: "Dashboard", icon: LayoutDashboard },
@@ -84,6 +85,7 @@ export default function Layout({ children, currentPageName }) {
       <main className="flex-1 overflow-auto bg-gray-50">
         {children}
       </main>
+      <Toaster position="top-right" richColors closeButton />
     </div>
   );
 }

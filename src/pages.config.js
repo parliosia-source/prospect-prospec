@@ -49,11 +49,11 @@
  */
 import Admin from './pages/Admin';
 import Assistant from './pages/Assistant';
-import CampaignDetail from './pages/CampaignDetail';
-import Campaigns from './pages/Campaigns';
-import Dashboard from './pages/Dashboard';
 import LeadDetail from './pages/LeadDetail';
+import Campaigns from './pages/Campaigns';
 import Pipeline from './pages/Pipeline';
+import Dashboard from './pages/Dashboard';
+import CampaignDetail from './pages/CampaignDetail';
 import ProspectDetail from './pages/ProspectDetail';
 import __Layout from './Layout.jsx';
 
@@ -61,11 +61,11 @@ import __Layout from './Layout.jsx';
 export const PAGES = {
     "Admin": Admin,
     "Assistant": Assistant,
-    "CampaignDetail": CampaignDetail,
-    "Campaigns": Campaigns,
-    "Dashboard": Dashboard,
     "LeadDetail": LeadDetail,
+    "Campaigns": Campaigns,
     "Pipeline": Pipeline,
+    "Dashboard": Dashboard,
+    "CampaignDetail": CampaignDetail,
     "ProspectDetail": ProspectDetail,
 }
 
