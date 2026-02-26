@@ -9,6 +9,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Copy, Save, RefreshCw, RotateCcw, Sparkles, CheckCircle2, ChevronDown, ChevronUp, Send, FileEdit, AlertCircle
 } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const STATUS_STYLES = {
   DRAFT: "bg-amber-100 text-amber-700",
@@ -32,6 +36,7 @@ export default function MessageComposer({ message: initialMessage, onUpdated }) 
   const [refineObjective, setRefineObjective] = useState("CALL_15");
   const [refineInstructions, setRefineInstructions] = useState("");
   const [suggestions, setSuggestions] = useState([]);
+  const [showSentConfirm, setShowSentConfirm] = useState(false);
 
   const generatedContent = msg.generatedBody || msg.body || "";
   const generatedSubject = msg.generatedSubject || msg.subject || "";
@@ -58,17 +63,23 @@ export default function MessageComposer({ message: initialMessage, onUpdated }) 
   const handleCopy = async () => {
     setIsCopying(true);
     const textToCopy = (msg.channel === "EMAIL" && activeSubject ? `Sujet: ${activeSubject}\n\n` : "") + activeBody;
-    await navigator.clipboard.writeText(textToCopy);
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      toast.success("Message copié — collez-le sur LinkedIn/Email, puis cliquez \"Message envoyé ✅\"");
+    } catch (err) {
+      console.error("Clipboard error:", err);
+      toast.error("Impossible de copier automatiquement. Sélectionnez le texte manuellement.");
+      setIsCopying(false);
+      return;
+    }
     const newCount = (msg.copyCount || 0) + 1;
     const updated = { copyCount: newCount, status: "COPIED", activeVersion: activeTab === "EDITED" && hasEdited ? "EDITED" : "GENERATED" };
-    // Also persist edited content if present
     if (hasEdited) {
       updated.editedBody = editedBody;
       updated.editedSubject = editedSubject;
     }
     await base44.entities.Message.update(msg.id, updated);
     setMsg(m => ({ ...m, ...updated }));
-    toast.success("Message copié — collez-le sur LinkedIn/Email, puis cliquez \"Message envoyé ✅\"");
     setIsCopying(false);
     onUpdated?.();
   };
@@ -107,7 +118,7 @@ export default function MessageComposer({ message: initialMessage, onUpdated }) 
   };
 
   const handleMarkSent = async () => {
-    if (!window.confirm("Confirmer que ce message a bien été envoyé manuellement ?")) return;
+    setShowSentConfirm(false);
     setIsMarkingSent(true);
     // Save edits first if pending
     const finalBody = hasEdited ? editedBody : (msg.generatedBody || msg.body || "");
@@ -258,7 +269,7 @@ export default function MessageComposer({ message: initialMessage, onUpdated }) 
             ) : (
               <Button
                 size="sm"
-                onClick={handleMarkSent}
+                onClick={() => setShowSentConfirm(true)}
                 disabled={isMarkingSent}
                 className="gap-1.5 ml-auto bg-green-600 hover:bg-green-700 text-white"
               >
@@ -277,6 +288,28 @@ export default function MessageComposer({ message: initialMessage, onUpdated }) 
         )}
 
         {/* Refine panel */}
+        {/* Confirm "sent" dialog */}
+        <AlertDialog open={showSentConfirm} onOpenChange={setShowSentConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2">
+                <Send className="w-5 h-5 text-green-600" />
+                Confirmer l'envoi ?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                Ce message sera marqué comme envoyé. Une relance automatique sera planifiée.
+                Cette action ne peut pas être annulée.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="flex gap-2 justify-end">
+              <AlertDialogCancel>Annuler</AlertDialogCancel>
+              <AlertDialogAction onClick={handleMarkSent} className="bg-green-600 hover:bg-green-700">
+                Confirmer l'envoi
+              </AlertDialogAction>
+            </div>
+          </AlertDialogContent>
+        </AlertDialog>
+
         {showRefinePanel && (
           <div className="border border-purple-100 rounded-xl bg-purple-50 p-4 space-y-3">
             <div className="text-sm font-semibold text-purple-800 flex items-center gap-1.5">

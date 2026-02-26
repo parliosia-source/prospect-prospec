@@ -278,7 +278,7 @@ export default function CampaignDetail() {
                   Annuler la recherche
                 </Button>
               )}
-              {["DONE_PARTIAL", "FAILED", "CANCELED", "COMPLETED", "DRAFT"].includes(campaign.status) && (
+              {["DONE_PARTIAL", "DONE", "FAILED", "CANCELED", "COMPLETED", "DRAFT"].includes(campaign.status) && (
                 <Button variant="outline" onClick={() => setDeleteDialog(true)} className="gap-2 text-red-600 border-red-200 hover:bg-red-50">
                   <Trash2 className="w-4 h-4" />
                   Supprimer

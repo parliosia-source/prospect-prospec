@@ -453,8 +453,8 @@ Deno.serve(async (req) => {
   console.log(`[START] campaignId=${campaignId} target=${targetCount} existing=${prospectCount} isMTL=${isMTL} sectors=${requiredSectors.join(",")} freeSectorTerms=${freeSectorTerms.join(",")} keywords=${campaignKeywords.join(",")}`);
 
   if (prospectCount >= targetCount) {
-    await base44.entities.Campaign.update(campaignId, { status: "DONE", progressPct: 100, countProspects: prospectCount });
-    return Response.json({ success: true, campaignId, prospectCount, status: "DONE", skipReason: "ALREADY_AT_TARGET" });
+    await base44.entities.Campaign.update(campaignId, { status: "COMPLETED", progressPct: 100, countProspects: prospectCount });
+    return Response.json({ success: true, campaignId, prospectCount, status: "COMPLETED", skipReason: "ALREADY_AT_TARGET" });
   }
 
   let kbAccepted = 0, webAccepted = 0, webTopUpInserted = 0, braveRequests = 0;
@@ -774,7 +774,7 @@ Deno.serve(async (req) => {
     const finalProspectCount = finalProspects.length;
 
     let finalStatus, errorMessage = null;
-    if (finalProspectCount >= targetCount) finalStatus = "DONE";
+    if (finalProspectCount >= targetCount) finalStatus = "COMPLETED";
     else if (finalProspectCount > 0) {
       finalStatus = "DONE_PARTIAL";
       errorMessage = `${finalProspectCount}/${targetCount} prospects trouvés (STRICT=${strictCount}, EXPANDED=${expandedCount}, KB=${kbAccepted}, Brave=${webAccepted}). Relancez pour enrichir.`;

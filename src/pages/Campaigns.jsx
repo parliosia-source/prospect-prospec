@@ -162,11 +162,11 @@ export default function Campaigns() {
                     ) : (
                       <Button size="sm" variant="outline" onClick={() => handleRun(c)} className="gap-2">
                         <Play className="w-3.5 h-3.5" />
-                        {c.status === "COMPLETED" || c.status === "DONE_PARTIAL" ? "Relancer" : "Lancer"}
+                        {["COMPLETED", "DONE", "DONE_PARTIAL"].includes(c.status) ? "Relancer" : "Lancer"}
                       </Button>
                     )}
 
-                    {["DONE_PARTIAL", "FAILED", "CANCELED", "COMPLETED", "DRAFT"].includes(c.status) && (
+                    {["DONE_PARTIAL", "DONE", "FAILED", "CANCELED", "COMPLETED", "DRAFT"].includes(c.status) && (
                       <Button
                         size="sm"
                         variant="ghost"

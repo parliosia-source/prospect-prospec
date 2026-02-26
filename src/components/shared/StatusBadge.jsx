@@ -22,6 +22,7 @@ const CAMPAIGN_COLORS = {
   "DRAFT": "bg-slate-100 text-slate-700",
   "RUNNING": "bg-blue-100 text-blue-700",
   "COMPLETED": "bg-green-100 text-green-700",
+  "DONE": "bg-green-100 text-green-700",
   "DONE_PARTIAL": "bg-amber-100 text-amber-700",
   "CANCELED": "bg-slate-300 text-slate-700",
   "FAILED": "bg-red-100 text-red-700",
@@ -32,7 +33,7 @@ const LABELS = {
   "REJETÉ": "Rejeté", "EXPORTÉ": "Exporté", "FAILED_ANALYSIS": "Échec analyse",
   "NEW": "Nouveau", "CONTACTED": "Contacté", "REPLIED": "A répondu",
   "MEETING": "Meeting", "CLOSED_WON": "Gagné", "CLOSED_LOST": "Perdu",
-  "DRAFT": "Brouillon", "RUNNING": "En cours", "COMPLETED": "Terminé", "DONE_PARTIAL": "Incomplet", "CANCELED": "Annulée", "FAILED": "Échoué",
+  "DRAFT": "Brouillon", "RUNNING": "En cours", "COMPLETED": "Terminé", "DONE": "Terminé", "DONE_PARTIAL": "Incomplet", "CANCELED": "Annulée", "FAILED": "Échoué",
 };
 
 export default function StatusBadge({ status, type = "prospect", className = "" }) {

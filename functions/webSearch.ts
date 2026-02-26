@@ -5,40 +5,59 @@ const SERPAPI_KEY = Deno.env.get("SERPAPI_API_KEY");
 
 async function braveSearch(query, count = 10, offset = 0, geo = "ca", lang = "fr") {
   const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}&offset=${offset}&country=${geo}&search_lang=${lang}&extra_snippets=true`;
-  const res = await fetch(url, {
-    headers: { "Accept": "application/json", "X-Subscription-Token": BRAVE_KEY }
-  });
-  if (!res.ok) return { results: [], ok: false };
-  const data = await res.json();
-  const raw = data.web?.results || [];
-  return {
-    ok: true,
-    results: raw.map(r => ({
-      title: r.title || "",
-      url: r.url || "",
-      snippet: (r.description || "") + (r.extra_snippets?.length ? " " + r.extra_snippets.slice(0, 2).join(" ") : ""),
-      source: new URL(r.url).hostname.replace("www.", ""),
-      publishedAt: r.page_age || null,
-    }))
-  };
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const res = await fetch(url, {
+      headers: { "Accept": "application/json", "X-Subscription-Token": BRAVE_KEY },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return { results: [], ok: false };
+    const data = await res.json();
+    const raw = data.web?.results || [];
+    return {
+      ok: true,
+      results: raw.map(r => ({
+        title: r.title || "",
+        url: r.url || "",
+        snippet: (r.description || "") + (r.extra_snippets?.length ? " " + r.extra_snippets.slice(0, 2).join(" ") : ""),
+        source: new URL(r.url).hostname.replace("www.", ""),
+        publishedAt: r.page_age || null,
+      }))
+    };
+  } catch (e) {
+    clearTimeout(timeout);
+    console.warn(`[braveSearch] timeout/error: ${e.message}`);
+    return { results: [], ok: false };
+  }
 }
 
 async function serpSearch(query, start = 0, geo = "ca", lang = "fr") {
   const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(query)}&location=Canada&hl=${lang}&gl=${geo}&num=10&start=${start}&api_key=${SERPAPI_KEY}`;
-  const res = await fetch(url);
-  if (!res.ok) return { results: [], ok: false };
-  const data = await res.json();
-  const raw = data.organic_results || [];
-  return {
-    ok: true,
-    results: raw.map(r => ({
-      title: r.title || "",
-      url: r.link || "",
-      snippet: r.snippet || "",
-      source: r.displayed_link || (r.link ? new URL(r.link).hostname.replace("www.", "") : ""),
-      publishedAt: r.date || null,
-    }))
-  };
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return { results: [], ok: false };
+    const data = await res.json();
+    const raw = data.organic_results || [];
+    return {
+      ok: true,
+      results: raw.map(r => ({
+        title: r.title || "",
+        url: r.link || "",
+        snippet: r.snippet || "",
+        source: r.displayed_link || (r.link ? new URL(r.link).hostname.replace("www.", "") : ""),
+        publishedAt: r.date || null,
+      }))
+    };
+  } catch (e) {
+    clearTimeout(timeout);
+    console.warn(`[serpSearch] timeout/error: ${e.message}`);
+    return { results: [], ok: false };
+  }
 }
 
 Deno.serve(async (req) => {
