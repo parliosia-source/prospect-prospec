@@ -727,6 +727,7 @@ Deno.serve(async (req) => {
               if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
               else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
               else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
+              else if (norm.rejectReason === "invalidCompanyName") webRejectedInvalidName++;
               continue;
             }
             const domNorm = norm.domain.toLowerCase();
@@ -825,6 +826,7 @@ Deno.serve(async (req) => {
             if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
             else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
             else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
+            else if (norm.rejectReason === "invalidCompanyName") webRejectedInvalidName++;
             continue;
           }
           const domNorm = norm.domain.toLowerCase();
@@ -888,7 +890,7 @@ Deno.serve(async (req) => {
       kbAccepted,
       // ── Web pipeline ──
       webAccepted, webTopUpInserted,
-      webRejectedBlockedDomain, webRejectedBlockedPathOrTitle, webRejectedNoSectorMatch,
+      webRejectedBlockedDomain, webRejectedBlockedPathOrTitle, webRejectedNoSectorMatch, webRejectedInvalidName,
       braveRequests,
       braveQuotaExceeded: braveRL.quotaExceeded,
       brave429Count: braveRL.count429,
