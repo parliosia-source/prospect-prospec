@@ -1,17 +1,20 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
-import { Settings, FileText, Database, Activity, Plus, Edit2, Save, X, RefreshCw, Zap } from "lucide-react";
+import { Settings, FileText, Database, Activity, Plus, Edit2, Save, X, RefreshCw, Zap, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import ApiCostsSection from "../components/admin/ApiCostsSection";
+import KbCoverageMatrix from "../components/admin/KbCoverageMatrix";
 
 const TABS = [
   { id: "templates", label: "Templates", icon: FileText },
   { id: "settings", label: "Paramètres", icon: Settings },
   { id: "maintenance", label: "Maintenance", icon: Zap },
+  { id: "costs", label: "Coûts API", icon: DollarSign },
   { id: "logs", label: "Logs", icon: Activity },
 ];
 
@@ -350,6 +353,9 @@ export default function Admin() {
             )}
           </div>
 
+          {/* KB Sector × Region Matrix */}
+          {kbStats && <KbCoverageMatrix kbStats={kbStats} />}
+
           {/* Coverage by Sector */}
           <div className="bg-white rounded-xl border p-5">
             <div className="flex items-start justify-between mb-4">
@@ -670,6 +676,13 @@ export default function Admin() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* API COSTS */}
+      {activeTab === "costs" && (
+        <div className="space-y-5 max-w-5xl">
+          <ApiCostsSection />
         </div>
       )}
 
