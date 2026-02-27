@@ -425,6 +425,7 @@ Deno.serve(async (req) => {
 
   const START = Date.now();
   const MAX_MS = 90 * 1000;
+  const kbOnlyMode = campaign.kbOnlyMode === true;
 
   // Load API costs from settings
   let apiCosts = {
@@ -489,7 +490,7 @@ Deno.serve(async (req) => {
   let kbMatchedByPrimarySector = 0, kbMatchedByDerivedSector = 0;
   let strictCount = 0, expandedCount = 0, rejectedCount = 0;
   let kbAfterMissingFields = 0;
-  let webRejectedBlockedDomain = 0, webRejectedBlockedPathOrTitle = 0, webRejectedNoSectorMatch = 0;
+  let webRejectedBlockedDomain = 0, webRejectedBlockedPathOrTitle = 0, webRejectedNoSectorMatch = 0, webRejectedInvalidName = 0;
   const topRejectReasons = {};
   const derivedReasonsCounts = {};
   const sampleMatched = [];
@@ -526,7 +527,7 @@ Deno.serve(async (req) => {
 
     let kbAll = [];
     let page = 0;
-    while (Date.now() - START < MAX_MS * 0.4) {
+    while (Date.now() - START < MAX_MS * 0.7) {
       const batch = await base44.asServiceRole.entities.KBEntityV3.filter(kbFilterQuery, '-confidenceScore', 500, page * 500).catch(() => []);
       if (!batch || batch.length === 0) break;
       kbAll = kbAll.concat(batch);
@@ -540,7 +541,7 @@ Deno.serve(async (req) => {
       const fallbackQuery = { ...kbFilterQuery, geoScope: "UNKNOWN" };
       let fbPage = 0;
       const existingIds = new Set(kbAll.map(e => e.id));
-      while (Date.now() - START < MAX_MS * 0.4) {
+      while (Date.now() - START < MAX_MS * 0.7) {
         const batch = await base44.asServiceRole.entities.KBEntityV3.filter(fallbackQuery, '-confidenceScore', 500, fbPage * 500).catch(() => []);
         if (!batch || batch.length === 0) break;
         for (const e of batch) {
@@ -632,7 +633,7 @@ Deno.serve(async (req) => {
 
     for (const { kb, matchedCanonical, tier, sectorScore, reasons } of orderedKb) {
       if (prospectCount >= targetCount) { stopReason = "TARGET_REACHED"; break; }
-      if (Date.now() - START > MAX_MS * 0.45) { stopReason = "TIME_BUDGET_KB"; break; }
+      if (Date.now() - START > MAX_MS * 0.70) { stopReason = "TIME_BUDGET_KB"; break; }
 
       const domNorm = (kb.domain || "").toLowerCase();
       if (existingDomains.has(domNorm)) continue;
@@ -674,12 +675,16 @@ Deno.serve(async (req) => {
         });
       }
     }
-    console.log(`[KB] END kbAccepted=${kbAccepted} total=${prospectCount}`);
+    console.log(`[KB] END kbAccepted=${kbAccepted} total=${prospectCount} kbOnlyMode=${kbOnlyMode}`);
 
     // ══════════════════════════════════════════════════════════════════════
     // PHASE 2 — Brave Search (parallelized by batches of 3)
+    // KB-First: skip web search if KB already filled target or kbOnlyMode
     // ══════════════════════════════════════════════════════════════════════
-    if (prospectCount < targetCount && !stopReason) {
+    if (kbOnlyMode) {
+      stopReason = stopReason || "KB_ONLY_MODE";
+      console.log(`[BRAVE] SKIPPED — kbOnlyMode=true`);
+    } else if (prospectCount < targetCount && !stopReason) {
       const queries = buildQueries(requiredSectors, locQuery, campaignKeywords);
       const MAX_BRAVE = 250;
       const BRAVE_BATCH_SIZE = 3;
@@ -803,9 +808,9 @@ Deno.serve(async (req) => {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // PHASE 3 — SerpAPI fallback
+    // PHASE 3 — SerpAPI fallback (skip if kbOnlyMode)
     // ══════════════════════════════════════════════════════════════════════
-    if (prospectCount < targetCount && braveRL.quotaExceeded && SERP_KEY && !stopReason) {
+    if (!kbOnlyMode && prospectCount < targetCount && braveRL.quotaExceeded && SERP_KEY && !stopReason) {
       console.log("[SERP] Starting SerpAPI fallback");
       const serpQueries = buildQueries(requiredSectors, locQuery, campaignKeywords).slice(0, 5);
       for (const query of serpQueries) {
