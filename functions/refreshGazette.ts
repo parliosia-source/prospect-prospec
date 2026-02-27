@@ -37,6 +37,27 @@ Deno.serve(async (req) => {
   const today = format(new Date(), "yyyy-MM-dd");
   const lookahead = format(addDays(new Date(), 90), "yyyy-MM-dd");
 
+  // Load API costs
+  let apiCosts = {
+    "Brave Search": { unitCost: 0.001, unitType: "query" },
+    "OpenAI_Short": { unitCost: 0.002, unitType: "call" },
+  };
+  const settingsArr = await base44.asServiceRole.entities.AppSettings.filter({ settingsId: "global" }).catch(() => []);
+  if (settingsArr[0]?.apiCosts) apiCosts = { ...apiCosts, ...settingsArr[0].apiCosts };
+
+  async function logApiUsage(apiName, status, unitsUsed = 1) {
+    await base44.asServiceRole.entities.ApiUsageLog.create({
+      timestamp: new Date().toISOString(),
+      apiName,
+      functionName: "refreshGazette",
+      cost: (apiCosts[apiName]?.unitCost || 0) * unitsUsed,
+      unitsUsed,
+      unitType: apiCosts[apiName]?.unitType || "call",
+      ownerUserId: user.email,
+      status,
+    }).catch(() => {});
+  }
+
   // Search for upcoming events in Quebec
   const queries = [
     "conférence annuelle Québec Montréal 2025 2026 inscription",
@@ -46,17 +67,21 @@ Deno.serve(async (req) => {
 
   const searchResults = await Promise.allSettled(queries.map(q => braveSearch(q, 5)));
   const allResults = [];
+  let braveSuccessCount = 0;
   for (const r of searchResults) {
     if (r.status === "fulfilled") {
       allResults.push(...r.value.map(r => ({ title: r.title, url: r.url, snippet: r.snippet })));
+      braveSuccessCount++;
     }
   }
+  logApiUsage("Brave Search", "SUCCESS", braveSuccessCount || queries.length);
 
   if (allResults.length === 0) {
     return Response.json({ success: true, created: 0, reason: "No search results" });
   }
 
-  // Ask OpenAI to extract gazette items
+  // Log + Ask OpenAI to extract gazette items
+  logApiUsage("OpenAI_Short", "SUCCESS");
   const extracted = await callOpenAI(`Voici des résultats de recherche web sur les événements et nouvelles du secteur corporatif au Québec.
 
 ${allResults.slice(0, 15).map((r, i) => `${i+1}. ${r.title}\n   URL: ${r.url}\n   Snippet: ${r.snippet}`).join("\n\n")}

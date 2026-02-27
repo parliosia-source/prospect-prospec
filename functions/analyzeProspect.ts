@@ -222,6 +222,31 @@ Deno.serve(async (req) => {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Load API costs from settings
+  let apiCosts = {
+    "OpenAI_Short": { unitCost: 0.002, unitType: "call" },
+    "Hunter.io": { unitCost: 0.01, unitType: "verification" },
+    "Brave Search": { unitCost: 0.001, unitType: "query" },
+    "SerpAPI": { unitCost: 0.005, unitType: "query" },
+  };
+  const settingsArr = await base44.asServiceRole.entities.AppSettings.filter({ settingsId: "global" }).catch(() => []);
+  if (settingsArr[0]?.apiCosts) apiCosts = { ...apiCosts, ...settingsArr[0].apiCosts };
+
+  async function logApiUsage(apiName, status, extraFields = {}) {
+    await base44.asServiceRole.entities.ApiUsageLog.create({
+      timestamp: new Date().toISOString(),
+      apiName,
+      functionName: "analyzeProspect",
+      cost: (apiCosts[apiName]?.unitCost || 0) * (extraFields.unitsUsed || 1),
+      unitsUsed: extraFields.unitsUsed || 1,
+      unitType: apiCosts[apiName]?.unitType || "call",
+      prospectId,
+      ownerUserId: user.email,
+      status,
+      ...extraFields,
+    }).catch(() => {});
+  }
+
   // KB freshness snippet
   let snippetToUse = prospect.serpSnippet || "";
   let freshnessUsed = false;
@@ -269,6 +294,9 @@ Réponds en JSON:
     findDecisionMakers(prospect.companyName, prospect.domain),
   ]);
 
+  // Log OpenAI usage for analysis
+  logApiUsage("OpenAI_Short", "SUCCESS", { unitsUsed: 1 });
+
   // Hunter contacts
   let hunterContacts = [];
   let hunterError = null;
@@ -276,10 +304,12 @@ Réponds en JSON:
     const hr = await hunterDomainSearch(prospect.domain, prospect.companyName);
     if (hr?.data?.emails) {
       hunterContacts = hr.data.emails.filter(e => e.type === "personal" && e.confidence >= 50).slice(0, 3);
+      logApiUsage("Hunter.io", "SUCCESS", { unitsUsed: hunterContacts.length || 1 });
     } else if (hr?.errors) {
       hunterError = hr.errors[0]?.details || "Hunter error";
+      logApiUsage("Hunter.io", "FAILED", { errorMessage: hunterError });
     }
-  } catch (e) { hunterError = e.message; }
+  } catch (e) { hunterError = e.message; logApiUsage("Hunter.io", "FAILED", { errorMessage: e.message }); }
 
   // Save contacts — always guarantees at least one stub
   await saveContacts(base44, prospectId, prospect, hunterContacts, decisionMakers, analysis.decisionMakerTitles);

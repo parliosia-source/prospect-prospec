@@ -426,6 +426,29 @@ Deno.serve(async (req) => {
   const START = Date.now();
   const MAX_MS = 90 * 1000;
 
+  // Load API costs from settings
+  let apiCosts = {
+    "Brave Search": { unitCost: 0.001, unitType: "query" },
+    "SerpAPI": { unitCost: 0.005, unitType: "query" },
+  };
+  const settingsArr = await base44.asServiceRole.entities.AppSettings.filter({ settingsId: "global" }).catch(() => []);
+  if (settingsArr[0]?.apiCosts) apiCosts = { ...apiCosts, ...settingsArr[0].apiCosts };
+
+  async function logApiUsage(apiName, status, extraFields = {}) {
+    await base44.asServiceRole.entities.ApiUsageLog.create({
+      timestamp: new Date().toISOString(),
+      apiName,
+      functionName: "runProspectSearch",
+      cost: (apiCosts[apiName]?.unitCost || 0) * (extraFields.unitsUsed || 1),
+      unitsUsed: extraFields.unitsUsed || 1,
+      unitType: apiCosts[apiName]?.unitType || "query",
+      campaignId,
+      ownerUserId: user.email,
+      status,
+      ...extraFields,
+    }).catch(() => {});
+  }
+
   const locQuery = campaign.locationQuery || "Montréal, QC";
   const targetCount = campaign.targetCount || 50;
 
@@ -682,6 +705,11 @@ Deno.serve(async (req) => {
         );
         braveRequests += batchQueries.length;
 
+        // Log each Brave request
+        for (const br of batchResults) {
+          logApiUsage("Brave Search", br.rateLimited ? "RATE_LIMITED" : "SUCCESS");
+        }
+
         // Process results sequentially to maintain dedup state
         for (const { results, rateLimited } of batchResults) {
           if (rateLimited && braveRL.quotaExceeded) { console.log("[BRAVE] quota exceeded"); break; }
@@ -784,6 +812,7 @@ Deno.serve(async (req) => {
         if (prospectCount >= targetCount) break;
         if (Date.now() - START > MAX_MS * 0.95) break;
         const results = await serpSearch(query);
+        logApiUsage("SerpAPI", results.length > 0 ? "SUCCESS" : "FAILED");
         for (const r of results) {
           if (prospectCount >= targetCount) break;
           const norm = normalizeWebResult(r, requiredSectors, isMTL);

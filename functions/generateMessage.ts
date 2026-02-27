@@ -30,6 +30,11 @@ Deno.serve(async (req) => {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Load API costs
+  let apiCosts = { "OpenAI_Short": { unitCost: 0.002, unitType: "call" } };
+  const settingsArr = await base44.asServiceRole.entities.AppSettings.filter({ settingsId: "global" }).catch(() => []);
+  if (settingsArr[0]?.apiCosts) apiCosts = { ...apiCosts, ...settingsArr[0].apiCosts };
+
   // Pick template (prefer FR_CA, HOT if segment matches)
   const segment = prospect?.segment || "STANDARD";
   const template = templates.find(t => t.languageVariant === "FR_CA" && t.segment === segment)
@@ -78,6 +83,19 @@ ${template.body}` : "";
       .replace(/\{senderName\}/g, senderName)
       .replace(/\{senderTitle\}/g, "Représentant(e) SYNC Productions");
   }
+
+  // Log OpenAI usage
+  await base44.asServiceRole.entities.ApiUsageLog.create({
+    timestamp: new Date().toISOString(),
+    apiName: "OpenAI_Short",
+    functionName: "generateMessage",
+    cost: apiCosts["OpenAI_Short"]?.unitCost || 0.002,
+    unitsUsed: 1,
+    unitType: "call",
+    prospectId: prospectId || undefined,
+    ownerUserId: user.email,
+    status: "SUCCESS",
+  }).catch(() => {});
 
   // Return both legacy fields + new structured fields
   result.generatedBody = result.body;
