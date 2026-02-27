@@ -7,11 +7,25 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 // - If NaN or empty → return []
 function normalizeArrayField(v) {
   if (Array.isArray(v)) {
-    // Check if elements are clean strings (not stringified arrays)
-    const cleaned = v.map(item => {
-      if (typeof item !== "string") return String(item).trim();
-      return item.trim();
-    }).filter(Boolean);
+    // Check if elements are clean strings or contain stringified arrays like "['Immobilier']"
+    const cleaned = [];
+    for (const item of v) {
+      const s = String(item).trim();
+      if (!s) continue;
+      // Detect stringified arrays inside array elements: "['Immobilier']" or '["Immobilier"]'
+      if (s.startsWith("[") && s.endsWith("]")) {
+        try {
+          const parsed = JSON.parse(s.replace(/'/g, '"'));
+          if (Array.isArray(parsed)) { cleaned.push(...parsed.map(x => String(x).trim()).filter(Boolean)); continue; }
+        } catch (_) {}
+        // Fallback: strip brackets and quotes
+        const inner = s.slice(1, -1);
+        const parts = inner.split(",").map(x => x.replace(/['"]/g, "").trim()).filter(Boolean);
+        cleaned.push(...parts);
+        continue;
+      }
+      cleaned.push(s);
+    }
     return cleaned;
   }
   if (!v || String(v).trim() === "" || String(v).toLowerCase() === "nan") return [];
@@ -40,6 +54,7 @@ function normalizeArrayField(v) {
 }
 
 function arraysEqual(a, b) {
+  if (!a || !b) return false;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i] !== b[i]) return false;
