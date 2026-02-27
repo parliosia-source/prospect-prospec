@@ -360,7 +360,9 @@ function fuzzyMatchSectors(kb, requiredSectors) {
 }
 
 // ── Retry helper ──────────────────────────────────────────────────────────────
-async function createProspectWithRetry(base44, payload, retryStats, maxRetries = 6) {
+// retryStats.totalWaitMs tracks cumulative wait time so callers can exclude it
+// from the active processing budget.
+async function createProspectWithRetry(base44, payload, retryStats, maxRetries = 8) {
   let lastErr;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -372,10 +374,12 @@ async function createProspectWithRetry(base44, payload, retryStats, maxRetries =
       lastErr = err;
       retryStats.createRetryCount++;
       retryStats.rateLimitHitCount++;
-      // Exponential backoff + jitter: 1s, 2s, 4s, 8s, 16s, 32s ± up to 500ms
+      // Exponential backoff + jitter: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s ± up to 500ms
       const delay = Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 500);
-      console.log(`[RETRY] Prospect.create attempt=${attempt + 1}/${maxRetries} delay=${delay}ms err=${err.message}`);
+      const prospectName = payload.companyName || payload.domain || "?";
+      console.log(`[RETRY] Prospect.create (${prospectName}) attempt=${attempt + 1}/${maxRetries} delay=${delay}ms err=${err.message}`);
       await new Promise(r => setTimeout(r, delay));
+      retryStats.totalWaitMs = (retryStats.totalWaitMs || 0) + delay;
     }
   }
   // maxRetries exhausted — mark and re-throw
@@ -483,7 +487,7 @@ Deno.serve(async (req) => {
 
   let kbAccepted = 0, webAccepted = 0, webTopUpInserted = 0, braveRequests = 0;
   let stopReason = null;
-  const retryStats = { createRetryCount: 0, rateLimitHitCount: 0, rateLimitExhausted: false };
+  const retryStats = { createRetryCount: 0, rateLimitHitCount: 0, rateLimitExhausted: false, totalWaitMs: 0 };
 
   // ── Instrumentation counters ──────────────────────────────────────────────
   let matchByIndustrySectorsCount = 0, matchByThemesCount = 0, matchByPrimaryThemeCount = 0, matchByIndustryLabelCount = 0;
@@ -633,7 +637,9 @@ Deno.serve(async (req) => {
 
     for (const { kb, matchedCanonical, tier, sectorScore, reasons } of orderedKb) {
       if (prospectCount >= targetCount) { stopReason = "TARGET_REACHED"; break; }
-      if (Date.now() - START > MAX_MS * 0.70) { stopReason = "TIME_BUDGET_KB"; break; }
+      // Active time = elapsed minus rate-limit wait time
+      const activeTimeMs = (Date.now() - START) - (retryStats.totalWaitMs || 0);
+      if (activeTimeMs > MAX_MS * 0.70) { stopReason = "TIME_BUDGET_KB"; break; }
 
       const domNorm = (kb.domain || "").toLowerCase();
       if (existingDomains.has(domNorm)) continue;
@@ -693,7 +699,8 @@ Deno.serve(async (req) => {
       while (queryIdx < queries.length) {
         if (prospectCount >= targetCount) { stopReason = "TARGET_REACHED"; break; }
         if (braveRequests >= MAX_BRAVE || braveRL.quotaExceeded) break;
-        if (Date.now() - START > MAX_MS * 0.85) { stopReason = "TIME_BUDGET"; break; }
+        const activeTimeBrave = (Date.now() - START) - (retryStats.totalWaitMs || 0);
+        if (activeTimeBrave > MAX_MS * 0.85) { stopReason = "TIME_BUDGET"; break; }
 
         // Build batch
         const batchQueries = [];
@@ -816,7 +823,8 @@ Deno.serve(async (req) => {
       const serpQueries = buildQueries(requiredSectors, locQuery, campaignKeywords).slice(0, 5);
       for (const query of serpQueries) {
         if (prospectCount >= targetCount) break;
-        if (Date.now() - START > MAX_MS * 0.95) break;
+        const activeTimeSerp = (Date.now() - START) - (retryStats.totalWaitMs || 0);
+        if (activeTimeSerp > MAX_MS * 0.95) break;
         const results = await serpSearch(query);
         logApiUsage("SerpAPI", results.length > 0 ? "SUCCESS" : "FAILED");
         for (const r of results) {
