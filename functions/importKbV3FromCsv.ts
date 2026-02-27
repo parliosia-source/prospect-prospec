@@ -10,8 +10,10 @@ function parseArr(v) {
   if (!v || String(v).trim() === "") return [];
   const s = String(v).trim();
   if (s.startsWith("[")) {
-    try { return JSON.parse(s).map(x => String(x).trim()).filter(Boolean); }
-    catch(_) {}
+    try {
+      const fixed = s.replace(/'/g, '"');
+      return JSON.parse(fixed).map(x => String(x).trim()).filter(Boolean);
+    } catch(_) {}
   }
   return s.split(",").map(x => x.trim()).filter(Boolean);
 }
@@ -63,7 +65,10 @@ function buildKbRecord(headers, values) {
     const val = values[i] || "";
     if (!key) continue;
 
-    if (["industrySectors", "themes", "keywords", "tags", "synonyms", "sectorSynonymsUsed", "eventSignals", "qualityFlags"].includes(key)) {
+    // Skip non-schema fields
+    if (key === "is_sample") continue;
+
+    if (["industrySectors", "themes", "keywords", "tags", "synonyms", "sectorSynonymsUsed", "eventSignals", "qualityFlags", "industrySectorsDerivedReasons"].includes(key)) {
       record[key] = parseArr(val);
     } else if (["themeConfidence", "confidenceScore"].includes(key)) {
       record[key] = parseNumber(val);
@@ -108,69 +113,87 @@ Deno.serve(async (req) => {
     const headers = rows[0].map(h => h.trim());
     const dataRows = rows.slice(1);
 
-    // Load existing domains for dedup
+    // ── Load existing entities for robust deduplication ───────────────────────
     const existing = await base44.asServiceRole.entities.KBEntityV3.list("-updated_date", 5000).catch(() => []);
-    const existingDomains = new Set(existing.map(e => (e.domain || "").toLowerCase()));
+    const existingDomainMap = new Map(); // domain -> entity
+    const existingNameMap = new Map();   // normalizedName -> entity
+    for (const e of existing) {
+      if (e.domain) existingDomainMap.set(e.domain.toLowerCase(), e);
+      if (e.normalizedName) existingNameMap.set(e.normalizedName.toLowerCase(), e);
+    }
 
-    let created = 0, updated = 0, skipped = 0;
+    let created = 0;
+    let updated = 0;
+    let skippedDuplicates = 0;
+    const duplicates = [];
     const errors = [];
     const samples = [];
 
-    // Batch insert
-    const BATCH_SIZE = 50;
-    for (let batchIdx = 0; batchIdx < dataRows.length; batchIdx += BATCH_SIZE) {
-      const batch = dataRows.slice(batchIdx, batchIdx + BATCH_SIZE);
-      const records = batch.map(row => buildKbRecord(headers, row)).filter(r => r.name && r.domain);
+    for (const row of dataRows) {
+      const record = buildKbRecord(headers, row);
+      if (!record.name || !record.domain) {
+        errors.push(`Row skipped: missing name or domain`);
+        continue;
+      }
 
-      for (const record of records) {
+      const domNorm = record.domain.toLowerCase();
+      const nameNorm = (record.normalizedName || normText(record.name)).toLowerCase();
+      if (!record.normalizedName) record.normalizedName = nameNorm;
+
+      // ── Dedup check 1: exact domain match (case-insensitive) ─────────────
+      const domainMatch = existingDomainMap.get(domNorm);
+      if (domainMatch) {
+        console.warn(`[DEDUP] Doublon domain: "${record.name}" — domain "${domNorm}" déjà pris par "${domainMatch.name}" (id: ${domainMatch.id})`);
+        duplicates.push({ name: record.name, domain: domNorm, reason: "domain", existingName: domainMatch.name, existingId: domainMatch.id });
+        skippedDuplicates++;
+        continue;
+      }
+
+      // ── Dedup check 2: exact normalizedName match ────────────────────────
+      const nameMatch = existingNameMap.get(nameNorm);
+      if (nameMatch) {
+        console.warn(`[DEDUP] Doublon name: "${record.name}" — normalizedName "${nameNorm}" déjà pris par "${nameMatch.name}" (id: ${nameMatch.id})`);
+        duplicates.push({ name: record.name, domain: domNorm, reason: "normalizedName", existingName: nameMatch.name, existingId: nameMatch.id });
+        skippedDuplicates++;
+        continue;
+      }
+
+      // ── Insert with retry ────────────────────────────────────────────────
+      let success = false;
+      for (let attempt = 0; attempt < 5 && !success; attempt++) {
         try {
-          const domNorm = (record.domain || "").toLowerCase();
-
-          // Check for existing by domain
-          const existing = await base44.asServiceRole.entities.KBEntityV3.filter({ domain: domNorm }).catch(() => []);
-          
-          // Retry logic for rate limits
-          let success = false;
-          for (let attempt = 0; attempt < 5 && !success; attempt++) {
-            try {
-              if (existing.length > 0) {
-                // Update
-                await base44.asServiceRole.entities.KBEntityV3.update(existing[0].id, record);
-                updated++;
-              } else {
-                // Create
-                await base44.asServiceRole.entities.KBEntityV3.create(record);
-                created++;
-                existingDomains.add(domNorm);
-              }
-              success = true;
-            } catch (retryErr) {
-              const isRateLimit = retryErr.status === 429 || (retryErr.message || "").toLowerCase().includes("rate limit");
-              if (!isRateLimit || attempt === 4) throw retryErr;
-              // Exponential backoff
-              const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
-              await new Promise(r => setTimeout(r, delay));
-            }
+          await base44.asServiceRole.entities.KBEntityV3.create(record);
+          created++;
+          // Add to maps to catch duplicates within the same CSV
+          existingDomainMap.set(domNorm, { name: record.name, id: "new" });
+          existingNameMap.set(nameNorm, { name: record.name, id: "new" });
+          success = true;
+        } catch (retryErr) {
+          const isRateLimit = retryErr.status === 429 || (retryErr.message || "").toLowerCase().includes("rate limit");
+          if (!isRateLimit || attempt === 4) {
+            errors.push(`${record.name}: ${String(retryErr.message).slice(0, 100)}`);
+            break;
           }
-
-          if (samples.length < 5) {
-            samples.push({ name: record.name, domain: record.domain, industryLabel: record.industryLabel, status: "ok" });
-          }
-        } catch (err) {
-          skipped++;
-          errors.push(String(err.message).slice(0, 100));
+          const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+          await new Promise(r => setTimeout(r, delay));
         }
+      }
+
+      if (samples.length < 5 && success) {
+        samples.push({ name: record.name, domain: record.domain, industryLabel: record.industryLabel, status: "created" });
       }
     }
 
     return Response.json({
       success: true,
+      total: dataRows.length,
       created,
       updated,
-      skipped,
-      total: dataRows.length,
+      skippedDuplicates,
+      errors: errors.length,
+      duplicates: duplicates.slice(0, 50),
       samples,
-      errors: errors.slice(0, 10),
+      errorDetails: errors.slice(0, 10),
     });
   } catch (error) {
     return Response.json({ error: error.message }, { status: 500 });

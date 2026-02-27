@@ -1,59 +1,140 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
 
-const OPENAI_KEY = Deno.env.get("OPENAI_API_KEY");
-const HUNTER_KEY = Deno.env.get("HUNTER_API_KEY");
-const BRAVE_KEY  = Deno.env.get("BRAVE_API_KEY");
-const SERPAPI_KEY = Deno.env.get("SERPAPI_API_KEY");
+const GEMINI_KEY      = Deno.env.get("GEMINI_API_KEY");
+const BROWSERLESS_KEY = Deno.env.get("BROWSERLESS_API_KEY");
+const HUNTER_KEY      = Deno.env.get("HUNTER_API_KEY");
+const BRAVE_KEY       = Deno.env.get("BRAVE_API_KEY");
+const SERPAPI_KEY     = Deno.env.get("SERPAPI_API_KEY");
+const OPENAI_KEY      = Deno.env.get("OPENAI_API_KEY");
 
-// ── Brave helpers ──────────────────────────────────────────────────────────────
-const braveRLState = { remaining: -1, reset: -1, count429: 0 };
-
-function parseBraveHeaders(res) {
-  const remaining = parseInt(res.headers.get("X-RateLimit-Remaining") || "-1", 10);
-  const reset     = parseInt(res.headers.get("X-RateLimit-Reset")     || "-1", 10);
-  if (remaining !== -1) braveRLState.remaining = remaining;
-  if (reset     !== -1) braveRLState.reset     = reset;
+// ── Utility ───────────────────────────────────────────────────────────────────
+function stripHtml(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+    .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&[a-z]+;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-async function waitForBraveReset(minWaitMs = 1000) {
-  const waitMs = braveRLState.reset > 0 ? Math.max(braveRLState.reset * 1000, minWaitMs) : minWaitMs;
-  await new Promise(r => setTimeout(r, waitMs));
+function textDensity(html) {
+  const text = stripHtml(html);
+  return { text, len: text.length, ratio: html.length > 0 ? text.length / html.length : 0 };
 }
 
-async function braveQuery(query, count = 5, retries = 2) {
-  if (!BRAVE_KEY) return [];
-  if (braveRLState.remaining === 0 && braveRLState.reset > 0) await waitForBraveReset();
-  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}&extra_snippets=true&country=ca&search_lang=fr`;
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const res = await fetch(url, { headers: { "Accept": "application/json", "X-Subscription-Token": BRAVE_KEY } });
-      parseBraveHeaders(res);
-      if (res.status === 429) { braveRLState.count429++; if (attempt < retries - 1) { await waitForBraveReset(Math.pow(2, attempt) * 1000); continue; } return []; }
-      if (!res.ok) return [];
-      if (braveRLState.remaining === 0) await waitForBraveReset(1000);
-      const data = await res.json();
-      return data.web?.results || [];
-    } catch (_) { return []; }
-  }
-  return [];
-}
-
-async function serpQuery(query, count = 5) {
-  if (!SERPAPI_KEY) return [];
+// ── Fetch with timeout ────────────────────────────────────────────────────────
+async function fetchWithTimeout(url, opts = {}, timeoutMs = 8000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&num=${count}&api_key=${SERPAPI_KEY}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── Standard HTML fetch ───────────────────────────────────────────────────────
+async function fetchHtml(url) {
+  try {
+    const res = await fetchWithTimeout(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; SyncProspectBot/2.0)" }
+    });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch (_) { return null; }
+}
+
+// ── Browserless render fallback ───────────────────────────────────────────────
+async function browserlessRender(url) {
+  if (!BROWSERLESS_KEY) return null;
+  try {
+    const res = await fetchWithTimeout(
+      `https://chrome.browserless.io/content?token=${BROWSERLESS_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, gotoOptions: { waitUntil: "networkidle2", timeout: 10000 } }),
+      },
+      15000
+    );
+    if (!res.ok) return null;
+    return await res.text();
+  } catch (_) { return null; }
+}
+
+// ── Smart page fetch: standard first, fallback Browserless ────────────────────
+async function smartFetch(url) {
+  const html = await fetchHtml(url);
+  if (html) {
+    const { text, len, ratio } = textDensity(html);
+    if (len >= 4000 && ratio >= 0.05) return { text: text.slice(0, 12000), source: "standard", url };
+    const rendered = await browserlessRender(url);
+    if (rendered) {
+      const r = textDensity(rendered);
+      if (r.len > len) return { text: r.text.slice(0, 12000), source: "browserless", url };
+    }
+    return { text: text.slice(0, 12000), source: "standard_thin", url };
+  }
+  const rendered = await browserlessRender(url);
+  if (rendered) {
+    const r = textDensity(rendered);
+    return { text: r.text.slice(0, 12000), source: "browserless", url };
+  }
+  return null;
+}
+
+// ── Crawl multiple pages ──────────────────────────────────────────────────────
+const SUBPAGES = [
+  "", "/about", "/a-propos", "/team", "/equipe", "/notre-equipe",
+  "/leadership", "/management", "/contact", "/nous-joindre"
+];
+
+async function crawlSite(domain) {
+  const base = `https://${domain}`;
+  const pages = [];
+  let scanned = 0;
+  for (const path of SUBPAGES) {
+    if (scanned >= 10) break;
+    const url = base + path;
+    scanned++;
+    const result = await smartFetch(url);
+    if (result && result.text.length > 200) pages.push(result);
+  }
+  return { pages, scannedCount: scanned };
+}
+
+// ── Gemini call ───────────────────────────────────────────────────────────────
+async function callGemini(prompt) {
+  if (!GEMINI_KEY) return null;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
+      })
+    }, 30000);
+    if (!res.ok) {
+      console.error(`[GEMINI] ${res.status}: ${await res.text().catch(() => "")}`);
+      return null;
+    }
     const data = await res.json();
-    return data.organic_results || [];
-  } catch (_) { return []; }
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error("[GEMINI] parse error:", e.message);
+    return null;
+  }
 }
 
-async function kbFreshnessSnippet(domain) {
-  const query = `site:${domain} (événement OR conférence OR gala OR congrès OR assemblée)`;
-  const results = await braveQuery(query, 3);
-  return results.map(r => r.extra_snippets?.[0] || r.description || "").filter(Boolean).join(" ").slice(0, 500) || null;
-}
-
+// ── OpenAI fallback ───────────────────────────────────────────────────────────
 async function callOpenAI(messages) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -64,143 +145,176 @@ async function callOpenAI(messages) {
   return JSON.parse(data.choices[0].message.content);
 }
 
-async function hunterDomainSearch(domain, company) {
-  const url = `https://api.hunter.io/v2/domain-search?domain=${encodeURIComponent(domain)}&company=${encodeURIComponent(company || "")}&limit=5&api_key=${HUNTER_KEY}`;
-  const res = await fetch(url);
-  return res.json();
+// ── Brave / SERP helpers ──────────────────────────────────────────────────────
+async function braveQuery(query, count = 5) {
+  if (!BRAVE_KEY) return [];
+  try {
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}&country=ca&search_lang=fr`;
+    const res = await fetchWithTimeout(url, {
+      headers: { "Accept": "application/json", "X-Subscription-Token": BRAVE_KEY }
+    }, 8000);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.web?.results || [];
+  } catch (_) { return []; }
 }
 
-// ── Decision Maker Discovery via LinkedIn (SERP) ──────────────────────────────
-async function findDecisionMakers(companyName, domain) {
-  const candidates = [];
-  const seen = new Set();
+async function serpQuery(query, count = 5) {
+  if (!SERPAPI_KEY) return [];
+  try {
+    const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&num=${count}&api_key=${SERPAPI_KEY}`;
+    const res = await fetchWithTimeout(url, {}, 8000);
+    const data = await res.json();
+    return data.organic_results || [];
+  } catch (_) { return []; }
+}
 
+// ── Gemini contact extraction ─────────────────────────────────────────────────
+async function extractContactsGemini(companyName, domain, crawledText) {
+  const prompt = `Tu es un expert en recherche de contacts B2B pour une entreprise de production audiovisuelle événementielle à Montréal.
+
+ENTREPRISE CIBLE: ${companyName}
+DOMAINE: ${domain}
+
+TEXTE EXTRAIT DU SITE WEB:
+${crawledText.slice(0, 15000)}
+
+OBJECTIF: Identifier les décideurs pertinents pour des services événementiels B2B (audiovisuel, conférences, galas, assemblées).
+
+RÔLES PRIORITAIRES (par ordre):
+1. Marketing / Communications
+2. Événements / Events
+3. RH / Ressources Humaines
+4. VP / Direction générale
+5. Développement des affaires
+6. Expérience client / Brand
+
+Extrais TOUS les contacts trouvés dans le texte. Pour chaque contact, fournis:
+- name: nom complet
+- title: titre/poste exact tel que trouvé
+- linkedin_url: URL LinkedIn si trouvée (sinon "")
+- email: email si trouvé (sinon "")
+- role_category: une des catégories prioritaires ci-dessus
+- confidence_score: 0-100
+
+Réponds en JSON strict:
+{"contacts": [...]}
+
+Si aucun contact n'est trouvé dans le texte, retourne {"contacts": []}.
+N'invente AUCUN nom ou contact.`;
+
+  return await callGemini(prompt);
+}
+
+// ── Fallback: Gemini LinkedIn search ──────────────────────────────────────────
+async function geminiLinkedInSearch(companyName, domain) {
   const queries = [
-    `site:linkedin.com/in "${companyName}" (Directeur OR Directrice OR VP OR "Vice-Président" OR "Head of" OR Responsable OR "Chef de") (marketing OR communications OR événements OR event OR "relations publiques")`,
-    `site:linkedin.com/in "${domain}" (Directeur OR VP OR Responsable) (marketing OR communications OR événement)`,
-    `"${companyName}" linkedin.com/in (Directeur marketing OR "VP Communications" OR "Responsable événements" OR "Chargé de communications" OR "Gestionnaire événements")`,
-    `site:linkedin.com/in "${companyName}" (Director OR Manager OR "Head of") (Marketing OR Communications OR Events)`,
+    `site:linkedin.com/in "${companyName}" marketing OR communications Montréal`,
+    `site:linkedin.com/in "${companyName}" directeur OR VP OR responsable événements`,
+    `site:linkedin.com/in "${domain}" marketing OR communications OR événements`,
   ];
 
+  const allResults = [];
   for (const q of queries) {
-    if (candidates.length >= 5) break;
     let results = await braveQuery(q, 8);
     if (results.length === 0) results = await serpQuery(q, 5);
-
     for (const r of results) {
-      if (candidates.length >= 5) break;
       const url = r.url || r.link || "";
-      if (!url.includes("linkedin.com/in/")) continue;
-
-      const cleanUrl = url.split("?")[0].replace(/\/$/, "").replace(/\/[a-z]{2}_[A-Z]{2}$/, "");
-      if (seen.has(cleanUrl)) continue;
-      seen.add(cleanUrl);
-
-      const title   = r.title   || "";
-      const snippet = r.description || r.snippet || "";
-
-      const nameMatch = title.match(/^([A-ZÀ-ÿ][a-zà-ÿ'-]+(?: [A-ZÀ-ÿ][a-zà-ÿ'-]+){1,3})\s*[-–|]/);
-      const fullName  = nameMatch ? nameMatch[1].trim() : null;
-
-      const roleMatch = title.match(/[-–|]\s*([^|–\-]{5,80})(?:\s*[-–|]|$)/);
-      const role = roleMatch ? roleMatch[1].trim() : (snippet.slice(0, 100) || "");
-
-      candidates.push({
-        fullName,
-        title: role,
-        linkedinUrl: cleanUrl,
-        sourceUrl: cleanUrl,
-        confidence: fullName ? 0.85 : 0.5,
-      });
-    }
-  }
-
-  const PRIORITY = /directeur|directrice|vp |vice.pr[eé]|chef|head of|responsable|manager|gestionnaire|chargé/i;
-  const EVENT    = /marketing|communication|événement|event|expérience|brand|relations|public/i;
-
-  candidates.sort((a, b) => {
-    const score = (x) =>
-      (PRIORITY.test(x.title || "") ? 3 : 0) +
-      (EVENT.test(x.title    || "") ? 2 : 0) +
-      (x.fullName                   ? 1 : 0);
-    return score(b) - score(a);
-  });
-
-  return candidates.slice(0, 3);
-}
-
-// ── Save contacts — always guarantee at least one ─────────────────────────────
-async function saveContacts(base44, prospectId, prospect, hunterContacts, decisionMakers, aiTitles) {
-  const savedContacts = [];
-
-  // 1. Hunter contacts (have email — best quality)
-  for (const hc of hunterContacts) {
-    const existing = await base44.entities.Contact.filter({ prospectId, email: hc.value });
-    const linkedinDM = decisionMakers.find(dm =>
-      dm.fullName && hc.first_name && hc.last_name &&
-      dm.fullName.toLowerCase().includes(hc.first_name.toLowerCase()) &&
-      dm.fullName.toLowerCase().includes(hc.last_name.toLowerCase())
-    );
-    const linkedinUrl = hc.linkedin || linkedinDM?.linkedinUrl || "";
-    if (existing.length === 0) {
-      const c = await base44.entities.Contact.create({
-        prospectId,
-        ownerUserId:     prospect.ownerUserId,
-        firstName:       hc.first_name || "",
-        lastName:        hc.last_name  || "",
-        fullName:        `${hc.first_name || ""} ${hc.last_name || ""}`.trim(),
-        title:           hc.position   || "",
-        email:           hc.value,
-        emailConfidence: hc.confidence,
-        linkedinUrl,
-        hasEmail: true,
-        source: "HUNTER",
-      });
-      savedContacts.push(c);
-    }
-  }
-
-  // 2. LinkedIn-only DMs (not matched to Hunter)
-  const hunterNames = hunterContacts.map(h => `${h.first_name || ""} ${h.last_name || ""}`.trim().toLowerCase());
-  for (const dm of decisionMakers) {
-    if (!dm.linkedinUrl) continue;
-    const alreadySaved = dm.fullName && hunterNames.some(n => n && dm.fullName && n.includes(dm.fullName.split(" ")[0]?.toLowerCase()));
-    if (alreadySaved) continue;
-    const existing = await base44.entities.Contact.filter({ prospectId, linkedinUrl: dm.linkedinUrl }).catch(() => []);
-    if (existing.length === 0) {
-      const c = await base44.entities.Contact.create({
-        prospectId,
-        ownerUserId:    prospect.ownerUserId,
-        fullName:       dm.fullName  || "",
-        title:          dm.title     || "",
-        linkedinUrl:    dm.linkedinUrl,
-        hasEmail:       false,
-        source:         "SERP",
-        contactPageUrl: dm.sourceUrl || "",
-      });
-      savedContacts.push(c);
-    }
-  }
-
-  // 3. Fallback: AI-generated title stubs — ALWAYS create at least 2 if no contacts found
-  const existingCount = await base44.entities.Contact.filter({ prospectId }).then(r => r.length).catch(() => 0);
-  if (existingCount === 0 && aiTitles?.length > 0) {
-    for (const title of aiTitles.slice(0, 2)) {
-      const existing = await base44.entities.Contact.filter({ prospectId, title });
-      if (existing.length === 0) {
-        await base44.entities.Contact.create({
-          prospectId,
-          ownerUserId:    prospect.ownerUserId,
-          title,
-          hasEmail:       false,
-          contactPageUrl: `https://${prospect.domain}/contact`,
-          source:         "SERP",
-        });
+      if (url.includes("linkedin.com/in/")) {
+        allResults.push({ url, title: r.title || "", snippet: r.description || r.snippet || "" });
       }
     }
+    if (allResults.length >= 10) break;
   }
 
-  return savedContacts;
+  if (allResults.length === 0) return [];
+
+  const prompt = `Tu es un expert en identification de contacts B2B.
+
+ENTREPRISE: ${companyName} (${domain})
+CONTEXTE: Services événementiels B2B à Montréal.
+
+Voici des résultats de recherche LinkedIn pour cette entreprise:
+${allResults.map((r, i) => `${i + 1}. URL: ${r.url}\n   Titre: ${r.title}\n   Extrait: ${r.snippet}`).join("\n\n")}
+
+Pour chaque résultat qui semble être un employé de ${companyName} dans un rôle pertinent (marketing, communications, événements, RH, VP, direction, développement affaires, expérience client, brand), extrais:
+- name: nom complet de la personne
+- title: son poste/titre
+- linkedin_url: l'URL LinkedIn nettoyée
+- email: "" (inconnu)
+- role_category: catégorie du rôle
+- confidence_score: 0-100
+
+Réponds en JSON strict: {"contacts": [...]}
+N'inclus QUE les personnes qui travaillent probablement chez ${companyName}. Maximum 5 contacts.`;
+
+  return await callGemini(prompt);
+}
+
+// ── Scoring interne ───────────────────────────────────────────────────────────
+const DECISION_ROLES = /directeur|directrice|vp |vice.pr[eé]|chef|head of|responsable|manager|gestionnaire|charg[eé]|coordonnateur|coordinat/i;
+const EVENT_ROLES    = /marketing|communication|événement|event|expérience|brand|relations|rh|ressources humaines|développement des affaires|business develop/i;
+
+function scoreContact(contact, hasTeamPage) {
+  let score = contact.confidence_score || 0;
+  const title = (contact.title || "").toLowerCase();
+  if (DECISION_ROLES.test(title)) score += 40;
+  if (EVENT_ROLES.test(title)) score += 20;
+  if (contact.linkedin_url && contact.linkedin_url.includes("linkedin.com/in/")) score += 20;
+  if (contact.email && contact.email.includes("@")) score += 20;
+  if (/montr[eé]al/i.test(contact.title || "")) score += 10;
+  if (hasTeamPage) score += 10;
+  return Math.min(score, 100);
+}
+
+// ── Hunter domain search ──────────────────────────────────────────────────────
+async function hunterDomainSearch(domain, company) {
+  if (!HUNTER_KEY) return { data: { emails: [] } };
+  try {
+    const url = `https://api.hunter.io/v2/domain-search?domain=${encodeURIComponent(domain)}&company=${encodeURIComponent(company || "")}&limit=5&api_key=${HUNTER_KEY}`;
+    const res = await fetchWithTimeout(url, {}, 8000);
+    return await res.json();
+  } catch (_) { return { data: { emails: [] } }; }
+}
+
+// ── Save contacts to DB ───────────────────────────────────────────────────────
+async function saveContacts(base44, prospectId, prospect, contacts) {
+  const saved = [];
+  const seen = new Set();
+
+  for (const c of contacts) {
+    const key = (c.linkedin_url || c.email || c.name || "").toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    const filters = c.email ? { prospectId, email: c.email } : c.linkedin_url ? { prospectId, linkedinUrl: c.linkedin_url } : null;
+    if (filters) {
+      const existing = await base44.entities.Contact.filter(filters).catch(() => []);
+      if (existing.length > 0) continue;
+    }
+
+    try {
+      const parts = (c.name || "").split(" ");
+      const record = await base44.entities.Contact.create({
+        prospectId,
+        ownerUserId:     prospect.ownerUserId,
+        firstName:       parts[0] || "",
+        lastName:        parts.slice(1).join(" ") || "",
+        fullName:        c.name || "",
+        title:           c.title || "",
+        email:           c.email || "",
+        emailConfidence: c.email ? (c.confidence_score || 50) : 0,
+        linkedinUrl:     c.linkedin_url || "",
+        hasEmail:        !!(c.email && c.email.includes("@")),
+        source:          c.source === "HUNTER" ? "HUNTER" : "SERP",
+        contactPageUrl:  c.source_page || "",
+      });
+      saved.push(record);
+    } catch (e) {
+      console.error(`[SAVE] Contact error: ${e.message}`);
+    }
+  }
+  return saved;
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
@@ -211,8 +325,6 @@ Deno.serve(async (req) => {
 
   const body = await req.json();
   const { prospectId } = body;
-  const freshnessEnabled = body.freshnessEnabled !== false;
-
   if (!prospectId) return Response.json({ error: "prospectId requis" }, { status: 400 });
 
   const prospects = await base44.entities.Prospect.filter({ id: prospectId });
@@ -222,12 +334,13 @@ Deno.serve(async (req) => {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Load API costs from settings
+  // Load API costs
   let apiCosts = {
     "OpenAI_Short": { unitCost: 0.002, unitType: "call" },
     "Hunter.io": { unitCost: 0.01, unitType: "verification" },
     "Brave Search": { unitCost: 0.001, unitType: "query" },
     "SerpAPI": { unitCost: 0.005, unitType: "query" },
+    "Gemini": { unitCost: 0.003, unitType: "call" },
   };
   const settingsArr = await base44.asServiceRole.entities.AppSettings.filter({ settingsId: "global" }).catch(() => []);
   if (settingsArr[0]?.apiCosts) apiCosts = { ...apiCosts, ...settingsArr[0].apiCosts };
@@ -247,16 +360,27 @@ Deno.serve(async (req) => {
     }).catch(() => {});
   }
 
-  // KB freshness snippet
-  let snippetToUse = prospect.serpSnippet || "";
-  let freshnessUsed = false;
-  if (prospect.sourceOrigin === "KB_TOPUP" && prospect.domain && freshnessEnabled) {
-    const liveSnippet = await kbFreshnessSnippet(prospect.domain);
-    if (liveSnippet) { snippetToUse = liveSnippet; freshnessUsed = true; }
-  }
+  const logs = [];
+  const log = (msg) => { console.log(`[ANALYZE] ${msg}`); logs.push(msg); };
 
-  // Run AI analysis + decision maker search in parallel
-  const [analysis, decisionMakers] = await Promise.all([
+  log(`START: ${prospect.companyName} (${prospect.domain})`);
+
+  // ── PHASE 1: Crawl (smartFetch with Browserless fallback) ───────────────────
+  log("Phase 1: Crawling site with smartFetch...");
+  const { pages, scannedCount } = await crawlSite(prospect.domain);
+  log(`Crawled ${scannedCount} pages, ${pages.length} with content`);
+
+  const hasTeamPage = pages.some(p => /team|equipe|leadership|management|notre-equipe/.test(p.url));
+  const crawledText = pages.map(p => `--- PAGE: ${p.url} (${p.source}) ---\n${p.text}`).join("\n\n");
+
+  // ── PHASE 2: Parallel extraction ────────────────────────────────────────────
+  log("Phase 2: Parallel extraction (Gemini + Hunter + OpenAI analysis)...");
+
+  const [geminiContacts, hunterResult, analysis] = await Promise.all([
+    crawledText.length > 500
+      ? extractContactsGemini(prospect.companyName, prospect.domain, crawledText)
+      : Promise.resolve({ contacts: [] }),
+    hunterDomainSearch(prospect.domain, prospect.companyName),
     callOpenAI([
       {
         role: "system",
@@ -275,46 +399,101 @@ Domaine: ${prospect.domain}
 Industrie: ${prospect.industry || "inconnue"}
 Localisation: ${JSON.stringify(prospect.location || {})}
 Type: ${prospect.entityType || ""}
-Snippet: ${snippetToUse}
+Snippet: ${prospect.serpSnippet || ""}
 Source: ${prospect.sourceOrigin || "WEB"}
+Contenu crawlé (résumé): ${crawledText.slice(0, 3000)}
 
 Réponds en JSON:
 {
-  "relevanceScore": number (0-100, based on likelihood of organising own events needing AV),
+  "relevanceScore": number (0-100),
   "segment": "HOT|STANDARD",
   "relevanceReasons": ["raison 1", "raison 2", "raison 3"],
   "opportunities": [{"label": string, "detail": string}],
   "painPoints": [{"label": string, "detail": string}],
   "eventTypes": ["types d'événements probables"],
   "recommendedApproach": "angle d'approche SYNC en 1-2 phrases concrètes, axé réduction de risque / qualité AV / hybridation",
-  "decisionMakerTitles": ["titres précis des décideurs à cibler (ex: Directeur marketing, VP Communications, Responsable événements, Directrice communications)"]
+  "decisionMakerTitles": ["titres des décideurs à cibler"]
 }`
       }
     ]),
-    findDecisionMakers(prospect.companyName, prospect.domain),
   ]);
 
-  // Log OpenAI usage for analysis
-  logApiUsage("OpenAI_Short", "SUCCESS", { unitsUsed: 1 });
+  // Log API usage
+  logApiUsage("OpenAI_Short", "SUCCESS");
+  if (geminiContacts?.contacts?.length > 0) logApiUsage("Gemini", "SUCCESS");
 
-  // Hunter contacts
-  let hunterContacts = [];
-  let hunterError = null;
-  try {
-    const hr = await hunterDomainSearch(prospect.domain, prospect.companyName);
-    if (hr?.data?.emails) {
-      hunterContacts = hr.data.emails.filter(e => e.type === "personal" && e.confidence >= 50).slice(0, 3);
-      logApiUsage("Hunter.io", "SUCCESS", { unitsUsed: hunterContacts.length || 1 });
-    } else if (hr?.errors) {
-      hunterError = hr.errors[0]?.details || "Hunter error";
-      logApiUsage("Hunter.io", "FAILED", { errorMessage: hunterError });
+  // Process Hunter contacts
+  const hunterContacts = (hunterResult?.data?.emails || [])
+    .filter(e => e.confidence >= 40)
+    .slice(0, 5)
+    .map(e => ({
+      name: `${e.first_name || ""} ${e.last_name || ""}`.trim(),
+      title: e.position || "",
+      email: e.value,
+      linkedin_url: e.linkedin || "",
+      confidence_score: e.confidence,
+      role_category: "unknown",
+      source: "HUNTER",
+    }));
+
+  logApiUsage("Hunter.io", hunterContacts.length > 0 ? "SUCCESS" : "FAILED", { unitsUsed: hunterContacts.length || 1 });
+
+  log(`Hunter: ${hunterContacts.length} contacts`);
+  log(`Gemini website: ${geminiContacts?.contacts?.length || 0} contacts`);
+
+  // ── PHASE 3: Fallback LinkedIn search if no contacts ────────────────────────
+  let linkedinContacts = [];
+  const websiteContactCount = (geminiContacts?.contacts?.length || 0) + hunterContacts.length;
+
+  if (websiteContactCount === 0) {
+    log("Phase 3: No contacts found — launching LinkedIn fallback...");
+    const liResult = await geminiLinkedInSearch(prospect.companyName, prospect.domain);
+    linkedinContacts = (liResult?.contacts || []).map(c => ({ ...c, source: "linkedin_search" }));
+    log(`LinkedIn fallback: ${linkedinContacts.length} contacts`);
+  } else {
+    log("Phase 3: Skipped — contacts already found");
+  }
+
+  // ── PHASE 4: Merge, score, deduplicate ──────────────────────────────────────
+  log("Phase 4: Scoring and merging...");
+
+  const allContacts = [
+    ...hunterContacts,
+    ...(geminiContacts?.contacts || []).map(c => ({ ...c, source: "website_gemini", source_page: pages[0]?.url || "" })),
+    ...linkedinContacts,
+  ];
+
+  for (const c of allContacts) {
+    c.contact_confidence_score = scoreContact(c, hasTeamPage);
+  }
+
+  allContacts.sort((a, b) => (b.contact_confidence_score || 0) - (a.contact_confidence_score || 0));
+  const topContacts = allContacts.slice(0, 5);
+  log(`Final contacts: ${topContacts.length} (from ${allContacts.length} total)`);
+
+  // ── PHASE 5: Save ──────────────────────────────────────────────────────────
+  log("Phase 5: Saving...");
+  const savedContacts = await saveContacts(base44, prospectId, prospect, topContacts);
+
+  if (savedContacts.length === 0 && analysis.decisionMakerTitles?.length > 0) {
+    log("Creating stub contacts from AI-suggested titles...");
+    for (const title of analysis.decisionMakerTitles.slice(0, 2)) {
+      try {
+        await base44.entities.Contact.create({
+          prospectId,
+          ownerUserId: prospect.ownerUserId,
+          title,
+          hasEmail: false,
+          contactPageUrl: `https://${prospect.domain}/contact`,
+          source: "SERP",
+        });
+        savedContacts.push({ title, stub: true });
+      } catch (_) {}
     }
-  } catch (e) { hunterError = e.message; logApiUsage("Hunter.io", "FAILED", { errorMessage: e.message }); }
-
-  // Save contacts — always guarantees at least one stub
-  await saveContacts(base44, prospectId, prospect, hunterContacts, decisionMakers, analysis.decisionMakerTitles);
+  }
 
   // Update prospect
+  const bestContact = topContacts[0];
   await base44.entities.Prospect.update(prospectId, {
     status:              "ANALYSÉ",
     relevanceScore:      analysis.relevanceScore,
@@ -324,19 +503,60 @@ Réponds en JSON:
     painPoints:          analysis.painPoints,
     eventTypes:          analysis.eventTypes,
     recommendedApproach: analysis.recommendedApproach,
-    analysisRaw:         analysis,
-    analysisError:       null,
-    analysisErrorAt:     null,
+    analysisRaw: {
+      ...analysis,
+      smartFetchEnabled: true,
+      pagesScannedCount: scannedCount,
+      pagesWithContent: pages.length,
+      hasTeamPage,
+      contactSources: {
+        hunter: hunterContacts.length,
+        geminiWebsite: geminiContacts?.contacts?.length || 0,
+        linkedinFallback: linkedinContacts.length,
+      },
+      bestContact: bestContact ? {
+        name: bestContact.name,
+        title: bestContact.title,
+        linkedin_url: bestContact.linkedin_url,
+        email: bestContact.email,
+        score: bestContact.contact_confidence_score,
+        source: bestContact.source,
+      } : null,
+    },
+    contactPageUrl: pages.find(p => /contact|nous-joindre/.test(p.url))?.url || prospect.contactPageUrl || "",
+    analysisError: null,
+    analysisErrorAt: null,
   });
 
+  // Activity log
   await base44.entities.ActivityLog.create({
     ownerUserId: user.email,
-    actionType:  "ANALYZE_PROSPECT",
-    entityType:  "Prospect",
-    entityId:    prospectId,
-    payload:     { relevanceScore: analysis.relevanceScore, segment: analysis.segment, freshnessUsed, hunterError, decisionMakersFound: decisionMakers.length },
-    status:      "SUCCESS",
+    actionType: "ANALYZE_PROSPECT",
+    entityType: "Prospect",
+    entityId: prospectId,
+    payload: {
+      relevanceScore: analysis.relevanceScore,
+      segment: analysis.segment,
+      pagesScanned: scannedCount,
+      contactsFound: topContacts.length,
+      contactsSaved: savedContacts.length,
+      sources: { hunter: hunterContacts.length, gemini: geminiContacts?.contacts?.length || 0, linkedin: linkedinContacts.length },
+    },
+    status: "SUCCESS",
   });
 
-  return Response.json({ success: true, analysis, hunterError, freshnessUsed, decisionMakersFound: decisionMakers.length });
+  log(`DONE: score=${analysis.relevanceScore}, contacts=${savedContacts.length}`);
+
+  return Response.json({
+    success: true,
+    analysis: { relevanceScore: analysis.relevanceScore, segment: analysis.segment },
+    contacts: {
+      total: savedContacts.length,
+      hunter: hunterContacts.length,
+      geminiWebsite: geminiContacts?.contacts?.length || 0,
+      linkedinFallback: linkedinContacts.length,
+    },
+    crawl: { pagesScanned: scannedCount, pagesWithContent: pages.length, hasTeamPage },
+    logs,
+  });
 });

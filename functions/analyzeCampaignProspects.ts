@@ -322,7 +322,7 @@ Deno.serve(async (req) => {
     const settled = await Promise.allSettled(batch.map(async (prospect) => {
       try {
         // Use V2 analysis via function invocation
-        const res = await base44.functions.invoke("analyzeProspectV2", { prospectId: prospect.id });
+        const res = await base44.functions.invoke("analyzeProspect", { prospectId: prospect.id });
         return { success: true };
       } catch (e) {
         const errMsg = (e.message || "Erreur inconnue").slice(0, 500);

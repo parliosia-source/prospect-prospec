@@ -110,7 +110,7 @@ export default function CampaignDetail() {
 
   const handleAnalyze = async (prospect) => {
     setAnalyzingIds(s => new Set([...s, prospect.id]));
-    await base44.functions.invoke("analyzeProspectV2", { prospectId: prospect.id });
+    await base44.functions.invoke("analyzeProspect", { prospectId: prospect.id });
     await loadAll();
     setAnalyzingIds(s => { const n = new Set(s); n.delete(prospect.id); return n; });
   };
