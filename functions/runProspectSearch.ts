@@ -654,94 +654,121 @@ Deno.serve(async (req) => {
     console.log(`[KB] END kbAccepted=${kbAccepted} total=${prospectCount}`);
 
     // ══════════════════════════════════════════════════════════════════════
-    // PHASE 2 — Brave Search (top-up if needed)
+    // PHASE 2 — Brave Search (parallelized by batches of 3)
     // ══════════════════════════════════════════════════════════════════════
     if (prospectCount < targetCount && !stopReason) {
       const queries = buildQueries(requiredSectors, locQuery, campaignKeywords);
       const MAX_BRAVE = 250;
+      const BRAVE_BATCH_SIZE = 3;
 
-      for (const query of queries) {
+      let queryIdx = 0;
+      while (queryIdx < queries.length) {
         if (prospectCount >= targetCount) { stopReason = "TARGET_REACHED"; break; }
         if (braveRequests >= MAX_BRAVE || braveRL.quotaExceeded) break;
         if (Date.now() - START > MAX_MS * 0.85) { stopReason = "TIME_BUDGET"; break; }
 
-        const { results, rateLimited } = await braveSearch(query, 20);
-        braveRequests++;
-        if (rateLimited && braveRL.quotaExceeded) { console.log("[BRAVE] quota exceeded"); break; }
+        // Build batch
+        const batchQueries = [];
+        while (batchQueries.length < BRAVE_BATCH_SIZE && queryIdx < queries.length) {
+          if (braveRequests + batchQueries.length >= MAX_BRAVE) break;
+          batchQueries.push(queries[queryIdx]);
+          queryIdx++;
+        }
+        if (batchQueries.length === 0) break;
 
-        for (const r of results) {
+        // Fire all queries in parallel
+        const batchResults = await Promise.all(
+          batchQueries.map(q => braveSearch(q, 20))
+        );
+        braveRequests += batchQueries.length;
+
+        // Process results sequentially to maintain dedup state
+        for (const { results, rateLimited } of batchResults) {
+          if (rateLimited && braveRL.quotaExceeded) { console.log("[BRAVE] quota exceeded"); break; }
           if (prospectCount >= targetCount) break;
-          const norm = normalizeWebResult(r, requiredSectors, isMTL);
-          if (!norm.accepted) {
-            if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
-            else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
-            else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
-            continue;
-          }
-          const domNorm = norm.domain.toLowerCase();
-          if (existingDomains.has(domNorm)) continue;
 
-          let kbEntityId = null;
-          if (!kbDomainSet.has(domNorm) && norm.score >= 75) {
+          for (const r of results) {
+            if (prospectCount >= targetCount) break;
+            const norm = normalizeWebResult(r, requiredSectors, isMTL);
+            if (!norm.accepted) {
+              if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
+              else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
+              else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
+              continue;
+            }
+            const domNorm = norm.domain.toLowerCase();
+            if (existingDomains.has(domNorm)) continue;
+
+            let kbEntityId = null;
+            if (!kbDomainSet.has(domNorm) && norm.score >= 75) {
+              try {
+                const todayStr = new Date().toISOString().split("T")[0];
+                const created = await base44.asServiceRole.entities.KBEntityV3.create({
+                  name: norm.companyName,
+                  normalizedName: normText(norm.companyName),
+                  domain: domNorm,
+                  website: norm.website,
+                  hqCity: isMTL ? "Montréal" : "",
+                  hqProvince: "QC",
+                  hqCountry: "CA",
+                  hqRegion: isMTL ? "MTL" : "QC_OTHER",
+                  geoScope: isMTL ? "MTL_CMM" : "QC_OTHER",
+                  industryLabel: norm.bestSector || requiredSectors[0] || "",
+                  primaryTheme: norm.bestSector || requiredSectors[0] || "",
+                  industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
+                  themes: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
+                  entityType: "COMPANY",
+                  tags: [], notes: (norm.snippet || "").slice(0, 300),
+                  keywords: [], synonyms: [], sectorSynonymsUsed: [],
+                  confidenceScore: norm.score,
+                  qualityFlags: ["WEB_TOPUP"],
+                  sourceOrigin: "WEB",
+                  sourceUrl: norm.website,
+                  lastVerifiedAt: todayStr,
+                });
+                kbDomainSet.add(domNorm);
+                kbEntityId = created.id;
+                webTopUpInserted++;
+              } catch (_) {}
+            }
+
             try {
-              const todayStr = new Date().toISOString().split("T")[0];
-              const created = await base44.asServiceRole.entities.KBEntityV3.create({
-                name: norm.companyName,
-                normalizedName: normText(norm.companyName),
-                domain: domNorm,
+              await createProspectWithRetry(base44, {
+                campaignId,
+                ownerUserId: campaign.ownerUserId,
+                companyName: norm.companyName,
                 website: norm.website,
-                hqCity: isMTL ? "Montréal" : "",
-                hqProvince: "QC",
-                hqCountry: "CA",
-                hqRegion: isMTL ? "MTL" : "QC_OTHER",
-                geoScope: isMTL ? "MTL_CMM" : "QC_OTHER",
-                industryLabel: norm.bestSector || requiredSectors[0] || "",
-                primaryTheme: norm.bestSector || requiredSectors[0] || "",
+                domain: domNorm,
+                industry: norm.bestSector || requiredSectors[0] || null,
                 industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
-                themes: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
+                industryLabel: norm.bestSector || requiredSectors[0] || null,
+                location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
                 entityType: "COMPANY",
-                tags: [], notes: (norm.snippet || "").slice(0, 300),
-                keywords: [], synonyms: [], sectorSynonymsUsed: [],
-                confidenceScore: norm.score,
-                qualityFlags: ["WEB_TOPUP"],
+                status: "NOUVEAU",
                 sourceOrigin: "WEB",
+                kbEntityId: kbEntityId || undefined,
+                serpSnippet: norm.snippet,
                 sourceUrl: norm.website,
-                lastVerifiedAt: todayStr,
+                relevanceScore: norm.score,
+                relevanceReasons: ["tier:WEB", `webScore:${norm.score}`],
+              }, retryStats);
+            } catch (err) {
+              if (retryStats.rateLimitExhausted) { stopReason = "RATE_LIMIT_CHECKPOINT"; break; }
+              throw err;
+            }
+
+            existingDomains.add(domNorm);
+            webAccepted++;
+            prospectCount++;
+
+            // Progress update every 5 web prospects
+            if (webAccepted % 5 === 0) {
+              await base44.entities.Campaign.update(campaignId, {
+                progressPct: Math.min(90, 40 + Math.round((webAccepted / Math.max(targetCount - kbAccepted, 1)) * 50)),
+                countProspects: prospectCount,
               });
-              kbDomainSet.add(domNorm);
-              kbEntityId = created.id;
-              webTopUpInserted++;
-            } catch (_) {}
+            }
           }
-
-          try {
-            await createProspectWithRetry(base44, {
-              campaignId,
-              ownerUserId: campaign.ownerUserId,
-              companyName: norm.companyName,
-              website: norm.website,
-              domain: domNorm,
-              industry: norm.bestSector || requiredSectors[0] || null,
-              industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
-              industryLabel: norm.bestSector || requiredSectors[0] || null,
-              location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
-              entityType: "COMPANY",
-              status: "NOUVEAU",
-              sourceOrigin: "WEB",
-              kbEntityId: kbEntityId || undefined,
-              serpSnippet: norm.snippet,
-              sourceUrl: norm.website,
-              relevanceScore: norm.score,
-              relevanceReasons: ["tier:WEB", `webScore:${norm.score}`],
-            }, retryStats);
-          } catch (err) {
-            if (retryStats.rateLimitExhausted) { stopReason = "RATE_LIMIT_CHECKPOINT"; break; }
-            throw err;
-          }
-
-          existingDomains.add(domNorm);
-          webAccepted++;
-          prospectCount++;
         }
       }
       console.log(`[BRAVE] END braveRequests=${braveRequests} webAccepted=${webAccepted}`);
