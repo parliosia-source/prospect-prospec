@@ -474,38 +474,71 @@ Deno.serve(async (req) => {
 
   try {
     // ══════════════════════════════════════════════════════════════════════
-    // PHASE 1 — KBEntityV2
+    // PHASE 1 — KBEntityV3 (filtered query instead of full load)
     // ══════════════════════════════════════════════════════════════════════
-    let kbAll = [];
-    let page = 0;
-    while (Date.now() - START < MAX_MS * 0.4) {
-      const batch = await base44.asServiceRole.entities.KBEntityV3.list('-confidenceScore', 500, page * 500).catch(() => []);
-      if (!batch || batch.length === 0) break;
-      kbAll = kbAll.concat(batch);
-      if (batch.length < 500) break;
-      page++;
-      if (page >= 20) break;
-    }
-    const kbDomainSet = new Set(kbAll.map(e => (e.domain || "").toLowerCase()));
-    console.log(`[KB] loaded=${kbAll.length}`);
 
-    // Geo filter — basé sur campaign.locationKey si disponible, sinon heuristique
+    // Resolve geo scopes first
     function resolveRequiredGeoScopes() {
       const locKey = (campaign.locationKey || "").toUpperCase();
       if (locKey === "MONTREAL") return ["MTL_CMM"];
       if (locKey === "QUEBEC_CITY" || locKey === "QUEBEC") return ["MTL_CMM", "QC_OTHER"];
       if (locKey === "CANADA") return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
-      // fallback heuristique texte
       if (isMTL) return ["MTL_CMM", "QC_OTHER"];
       if (/\b(qc|qu[eé]bec)\b/.test(normText(locQuery))) return ["MTL_CMM", "QC_OTHER"];
       return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
     }
     const requiredGeoScopes = resolveRequiredGeoScopes();
 
+    // Build a targeted filter query for KB
+    const kbFilterQuery = {};
+    // Filter by geoScope if possible
+    if (requiredGeoScopes.length < 4) {
+      kbFilterQuery.geoScope = { $in: requiredGeoScopes };
+    }
+    // Filter by industrySectors if campaign has sector requirements
+    if (requiredSectors.length > 0) {
+      // Use $in to match any KB entity whose industrySectors array contains at least one required sector
+      kbFilterQuery.industrySectors = { $in: requiredSectors };
+    }
+
+    let kbAll = [];
+    let page = 0;
+    while (Date.now() - START < MAX_MS * 0.4) {
+      const batch = await base44.asServiceRole.entities.KBEntityV3.filter(kbFilterQuery, '-confidenceScore', 500, page * 500).catch(() => []);
+      if (!batch || batch.length === 0) break;
+      kbAll = kbAll.concat(batch);
+      if (batch.length < 500) break;
+      page++;
+      if (page >= 20) break;
+    }
+
+    // If no sector filter was applied, also try entities without geoScope set (UNKNOWN)
+    if (requiredGeoScopes.length < 4) {
+      const fallbackQuery = { ...kbFilterQuery, geoScope: "UNKNOWN" };
+      let fbPage = 0;
+      const existingIds = new Set(kbAll.map(e => e.id));
+      while (Date.now() - START < MAX_MS * 0.4) {
+        const batch = await base44.asServiceRole.entities.KBEntityV3.filter(fallbackQuery, '-confidenceScore', 500, fbPage * 500).catch(() => []);
+        if (!batch || batch.length === 0) break;
+        for (const e of batch) {
+          if (!existingIds.has(e.id)) { kbAll.push(e); existingIds.add(e.id); }
+        }
+        if (batch.length < 500) break;
+        fbPage++;
+        if (fbPage >= 5) break;
+      }
+    }
+
+    const kbDomainSet = new Set(kbAll.map(e => (e.domain || "").toLowerCase()));
+    console.log(`[KB] loaded=${kbAll.length} (filtered query, geoScopes=${requiredGeoScopes.join(",")}, sectors=${requiredSectors.join(",")})`);
+
+    // Post-filter: validate required fields + fine-grained geo (hqRegion/hqProvince fallback for UNKNOWN geoScope)
     const kbRegionFiltered = kbAll.filter(e => {
       if (!e.domain || !e.website || !e.name) return false;
       kbAfterMissingFields++;
-      if (e.geoScope && e.geoScope !== "UNKNOWN") return requiredGeoScopes.includes(e.geoScope);
+      // If geoScope was set and matched the query, it's already valid
+      if (e.geoScope && e.geoScope !== "UNKNOWN") return true;
+      // For UNKNOWN geoScope entries, apply legacy heuristic
       if (isMTL) return ["MTL","GM"].includes(e.hqRegion);
       if (targetProvince) return e.hqProvince === targetProvince || ["MTL","GM","QC_OTHER"].includes(e.hqRegion);
       return true;
@@ -611,7 +644,7 @@ Deno.serve(async (req) => {
       kbAccepted++;
       prospectCount++;
 
-      if (kbAccepted % 20 === 0) {
+      if (kbAccepted % 5 === 0) {
         await base44.entities.Campaign.update(campaignId, {
           progressPct: Math.min(40, Math.round((kbAccepted / targetCount) * 40)),
           countProspects: prospectCount,
