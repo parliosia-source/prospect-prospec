@@ -1,16 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { base44 } from "@/api/base44Client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { X, Plus } from "lucide-react";
-
-const SECTORS = [
-  "Finance & Assurance", "Santé & Pharma", "Technologie", "Gouvernement & Public",
-  "Éducation & Formation", "Associations & OBNL", "Immobilier", "Droit & Comptabilité",
-  "Industrie & Manufacture", "Commerce de détail", "Transport & Logistique",
-];
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { X, Plus, Zap, Loader2, Database } from "lucide-react";
 
 const LOCATIONS = [
   { value: "MONTREAL", label: "Montréal", query: "Montréal, QC" },
@@ -18,14 +15,51 @@ const LOCATIONS = [
   { value: "CANADA", label: "Canada", query: "Canada" },
 ];
 
+const MAX_DISPLAYED_SECTORS = 12;
+
 export default function CampaignModal({ open, onClose, onSave }) {
   const [form, setForm] = useState({
     name: "", targetCount: 50, industrySectors: [], companySize: "ALL",
     locationMode: "CITY", locationQuery: "Montréal, QC", locationKey: "MONTREAL", keywords: [],
-    customSector: "",
+    customSector: "", kbOnlyMode: false,
   });
   const [kwInput, setKwInput] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Dynamic sector stats from KB
+  const [sectorStats, setSectorStats] = useState([]);
+  const [loadingSectors, setLoadingSectors] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const suggestionsRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoadingSectors(true);
+    base44.functions.invoke("getKbSectorStats", {}).then(res => {
+      setSectorStats(res.data?.sectors || []);
+    }).catch(() => {}).finally(() => setLoadingSectors(false));
+  }, [open]);
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(e.target)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const topSectors = sectorStats.slice(0, MAX_DISPLAYED_SECTORS);
+  const topSectorNames = new Set(topSectors.map(s => s.name));
+  const extraSectors = sectorStats.filter(s => !topSectorNames.has(s.name));
+
+  // Filter suggestions for autocomplete
+  const customVal = form.customSector.toLowerCase().trim();
+  const filteredSuggestions = customVal.length > 0
+    ? extraSectors.filter(s => s.name.toLowerCase().includes(customVal))
+    : extraSectors;
 
   const toggleSector = (s) => {
     setForm(f => ({
@@ -42,10 +76,16 @@ export default function CampaignModal({ open, onClose, onSave }) {
     setKwInput("");
   };
 
+  const selectSuggestion = (name) => {
+    if (!form.industrySectors.includes(name)) {
+      setForm(f => ({ ...f, industrySectors: [...f.industrySectors, name], customSector: "" }));
+    }
+    setShowSuggestions(false);
+  };
+
   const handleSave = async (launch = false) => {
     if (!form.name || !form.locationQuery) return;
     setSaving(true);
-    // Merge custom sector into industrySectors if provided
     const sectors = [...form.industrySectors];
     if (form.customSector.trim() && !sectors.includes(form.customSector.trim())) {
       sectors.push(form.customSector.trim());
@@ -53,28 +93,14 @@ export default function CampaignModal({ open, onClose, onSave }) {
     const payload = { ...form, industrySectors: sectors };
     delete payload.customSector;
     
-    // PHASE A: Create campaign + optimistic update if launching
-    const campaignResult = await onSave(payload, launch);
-    
-    if (launch && campaignResult?.campaignId) {
-      // Optimistic update: mark as RUNNING immediately for instant feedback
-      try {
-        await base44.entities.Campaign.update(campaignResult.campaignId, {
-          status: "RUNNING",
-          progressPct: 5,
-          errorMessage: null,
-          lastRunAt: new Date().toISOString(),
-        });
-      } catch (_) {}
-    }
+    await onSave(payload, launch);
     
     setSaving(false);
     onClose();
-    // Reset form
     setForm({
       name: "", targetCount: 50, industrySectors: [], companySize: "ALL",
       locationMode: "CITY", locationQuery: "Montréal, QC", locationKey: "MONTREAL", keywords: [],
-      customSector: "",
+      customSector: "", kbOnlyMode: false,
     });
   };
 
@@ -122,32 +148,67 @@ export default function CampaignModal({ open, onClose, onSave }) {
             </div>
           </div>
 
-          {/* Sectors (presets) */}
+          {/* Sectors (dynamic from KB) */}
           <div>
-            <Label className="mb-2 block">Secteur d'activité <span className="text-slate-400 font-normal text-xs">(optionnel — tous secteurs si aucun sélectionné)</span></Label>
-            <div className="flex flex-wrap gap-2 mb-2">
-              {SECTORS.map(s => (
-                <button
-                  key={s}
-                  onClick={() => toggleSector(s)}
-                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                    form.industrySectors.includes(s)
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-white text-slate-600 border-slate-200 hover:border-blue-300"
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-            {/* Custom free-text sector */}
-            <div className="flex gap-2 mt-2">
+            <Label className="mb-2 block">
+              Secteur d'activité <span className="text-slate-400 font-normal text-xs">(optionnel — tous secteurs si aucun sélectionné)</span>
+            </Label>
+            {loadingSectors ? (
+              <div className="flex items-center gap-2 text-xs text-slate-400 py-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Chargement des secteurs…
+              </div>
+            ) : (
+              <TooltipProvider delayDuration={300}>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {topSectors.map(s => (
+                    <Tooltip key={s.name}>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => toggleSector(s.name)}
+                          className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                            form.industrySectors.includes(s.name)
+                              ? "bg-blue-600 text-white border-blue-600"
+                              : "bg-white text-slate-600 border-slate-200 hover:border-blue-300"
+                          }`}
+                        >
+                          {s.name} <span className={`ml-0.5 ${form.industrySectors.includes(s.name) ? "text-blue-200" : "text-slate-400"}`}>({s.count})</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        {s.count} entreprises dans la base de connaissances
+                      </TooltipContent>
+                    </Tooltip>
+                  ))}
+                </div>
+              </TooltipProvider>
+            )}
+
+            {/* Custom sector with autocomplete */}
+            <div className="relative mt-2" ref={suggestionsRef}>
               <Input
                 value={form.customSector}
-                onChange={e => setForm(f => ({ ...f, customSector: e.target.value }))}
+                onChange={e => {
+                  setForm(f => ({ ...f, customSector: e.target.value }));
+                  setShowSuggestions(true);
+                }}
+                onFocus={() => setShowSuggestions(true)}
                 placeholder="Secteur libre (ex: agroalimentaire, médias…)"
                 className="text-sm"
               />
+              {showSuggestions && filteredSuggestions.length > 0 && (
+                <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                  {filteredSuggestions.map(s => (
+                    <button
+                      key={s.name}
+                      onClick={() => selectSuggestion(s.name)}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center justify-between"
+                    >
+                      <span>{s.name}</span>
+                      <span className="text-xs text-slate-400">{s.count}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -179,6 +240,25 @@ export default function CampaignModal({ open, onClose, onSave }) {
             </div>
           </div>
 
+          {/* KB Only Mode */}
+          <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+            <Checkbox
+              id="kbOnly"
+              checked={form.kbOnlyMode}
+              onCheckedChange={(checked) => setForm(f => ({ ...f, kbOnlyMode: checked === true }))}
+              className="mt-0.5"
+            />
+            <label htmlFor="kbOnly" className="cursor-pointer">
+              <div className="text-sm font-medium text-blue-800 flex items-center gap-1.5">
+                <Database className="w-3.5 h-3.5" />
+                Recherche rapide (base de connaissances uniquement)
+              </div>
+              <p className="text-xs text-blue-600 mt-0.5">
+                N'utilise que la KB interne — plus rapide, sans appels web. Idéal si la KB couvre bien le secteur ciblé.
+              </p>
+            </label>
+          </div>
+
           {/* Keywords */}
           <div>
             <Label>Mots-clés additionnels</Label>
@@ -208,6 +288,11 @@ export default function CampaignModal({ open, onClose, onSave }) {
               {allSectors.length > 0 && <div>🏢 <strong>Secteur :</strong> {allSectors.join(", ")}</div>}
               {form.keywords.length > 0 && <div>🔑 <strong>Mots-clés :</strong> {form.keywords.join(", ")}</div>}
               <div>🎯 <strong>Objectif :</strong> {form.targetCount} prospects</div>
+              {form.kbOnlyMode && (
+                <div className="flex items-center gap-1 text-blue-600">
+                  <Database className="w-3 h-3" /> <strong>Mode KB uniquement</strong>
+                </div>
+              )}
             </div>
           )}
         </div>
