@@ -52,7 +52,7 @@ Utiliser la fonction `importKbV3` avec ce fichier pour importer les entités dan
 
 ```json
 {
-  "fileUrl": "<URL_DU_FICHIER>",
+  "fileUrl": "https://files.manuscdn.com/user_upload_by_module/session_file/310519663394214279/lYBnKejbtIqXmndE.csv",
   "dryRun": false,
   "batchSize": 8,
   "offset": 0,
