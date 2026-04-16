@@ -115,48 +115,93 @@ const SECTOR_SCORING_RULES = {
   },
   "Commerce de détail": {
     strongSignals: [
-      "commerce","retail","magasin","boutique","vente","detaillant","e-commerce","ecommerce",
+      "commerce","retail","magasin","boutique","vente au detail","detaillant","e-commerce","ecommerce",
       "mode","fashion","alimentation","franchise","supermarche","epicerie","quincaillerie",
-      "centre commercial","distribution","grossiste",
+      "chaine de magasins","banniere","enseigne","marque de commerce",
     ],
-    exclusions: [],
+    exclusions: [
+      // Associations / councils / trade bodies — not retailers
+      "conseil quebecois","conseil canadien","conseil du commerce","retail council","cqcd","ccd",
+      "chambre de commerce","association des detaillants","federation du commerce",
+      "association","obnl","fondation","syndicat","ordre professionnel","federation","regroupement",
+      // Shopping centres / malls / venues — real estate, not retailers
+      "centre commercial","mall","galerie marchande","promenades","carrefour laval",
+      "place ville-marie","fairview","cadillac fairview","cominar","ivanhoe cambridge",
+      "oxford properties","quartier","complexe","place",
+      // Hospitality / tourism / restaurants — not corporate retail
+      "hotel","restauration","tourisme","tourism","auberge","hebergement","resort","spa",
+      // Wholesale / distribution — not retail
+      "grossiste","distributeur","distribution","entrepot","cargo","fret",
+      // Government / public
+      "gouvernement","municipalite","ville de","ministere",
+    ],
   },
 };
 
+// Sectors where exclusions are HARD blocks (entity is rejected, not just penalized)
+const HARD_BLOCK_SECTORS = new Set(["Commerce de détail"]);
+
 // Compute sectorScore (0–100) for a KB entity against a requested sector
 // Returns { score, tier, reasons, rejectReason }
-// SECTOR-ONLY: si le secteur match, l'entité est TOUJOURS acceptée. Jamais de REJECTED.
 function computeSectorScore(kb, sector) {
   const rules = SECTOR_SCORING_RULES[sector];
   const reasons = ["sectorMatch_accepted"];
-  let score = 75;
+  let score = 70; // base — spread will come from strong-signal hits below
 
   if (!rules) {
     return { score, tier: "STRICT", reasons: ["no_rules_accepted"], rejectReason: null };
   }
 
-  // ── Exclusions non bloquantes (pénalité de tri uniquement) ──────────────
+  // Full identity blob (name + labels + sectors + notes + tags for retail)
   const identityBlob = normText([
     kb.name, kb.normalizedName, kb.industryLabel, kb.primaryTheme,
     ...parseArr(kb.industrySectors), ...parseArr(kb.themes),
+    kb.notes || "", ...parseArr(kb.tags),
   ].filter(Boolean).join(" "));
 
+  // ── Exclusions ──────────────────────────────────────────────────────────
+  const isHardBlock = HARD_BLOCK_SECTORS.has(sector);
   for (const excl of rules.exclusions) {
     if (identityBlob.includes(normText(excl))) {
+      if (isHardBlock) {
+        // Hard block: reject entirely — these are non-retail entities
+        return { score: 0, tier: "REJECTED", reasons: [`exclusion_hard_block:${excl}`], rejectReason: excl };
+      }
       score = Math.max(50, score - 25);
       reasons.push(`exclusion_hit_non_blocking:${excl}`);
-      break; // une seule pénalité
+      break;
     }
   }
 
-  // Boost: primaryTheme or industryLabel is an exact match
+  // ── Strong-signal score spread ──────────────────────────────────────────
+  // Count how many strong signals are present — creates meaningful score distribution
+  const strongHits = rules.strongSignals.filter(sig => identityBlob.includes(normText(sig))).length;
+  if (strongHits >= 4) { score += 20; reasons.push(`strongSignals:${strongHits}`); }
+  else if (strongHits >= 2) { score += 10; reasons.push(`strongSignals:${strongHits}`); }
+  else if (strongHits === 1) { score += 5; reasons.push(`strongSignals:1`); }
+  // 0 strong signals: no boost (stays at base 70)
+
+  // ── Boost: primaryTheme or industryLabel is an exact match ─────────────
   const normSec = normSector(sector);
   if (normSector(kb.primaryTheme) === normSec || normSector(kb.industryLabel) === normSec) {
     score = Math.max(score, 85);
     reasons.push("primaryTheme_exactMatch");
   }
 
-  return { score, tier: "STRICT", reasons, rejectReason: null };
+  // ── Retail-specific: boost for recognizable retail signals ───────────────
+  if (sector === "Commerce de détail") {
+    if (/\b(magasin|boutique|franchise|supermarche|epicerie|chaine)\b/.test(identityBlob)) {
+      score += 5;
+      reasons.push("retail_specific_boost");
+    }
+    // Penalize if entity type looks like a trade body or venue
+    if (kb.entityType && /association|venue|mall|centre|federation/i.test(kb.entityType)) {
+      score = Math.max(50, score - 15);
+      reasons.push("entityType_penalty");
+    }
+  }
+
+  return { score: Math.min(score, 100), tier: "STRICT", reasons, rejectReason: null };
 }
 
 // ── GM city set ────────────────────────────────────────────────────────────────
@@ -200,7 +245,7 @@ const SECTOR_SYNONYMS = {
   "Immobilier": ["immobilier","real estate","propriété","construction","promoteur","logement","bureau","bâtiment","terrain","condo","REIT"],
   "Droit & Comptabilité": ["avocat","droit","law","comptable","comptabilité","notaire","juridique","fiscalité","audit","conformité","CPA"],
   "Industrie & Manufacture": ["usine","manufacture","fabrication","production","industrie","acier","chimie","mécanique","automatisation","assemblage","machinerie","ingénierie"],
-  "Commerce de détail": ["commerce","retail","magasin","boutique","vente","détaillant","e-commerce","mode","alimentation","franchise"],
+  "Commerce de détail": ["retail","magasin","boutique","détaillant","e-commerce","mode","alimentation","franchise","chaîne de magasins","vente au détail"],
   "Transport & Logistique": ["transport","logistique","livraison","cargo","fret","entrepôt","courrier","distribution","supply chain"],
 };
 
@@ -228,6 +273,51 @@ function getDomain(url) {
     if (labels.length >= 3 && TWO_PART_TLDS.has(labels.slice(-2).join("."))) return labels.slice(-3).join(".");
     return labels.slice(-2).join(".");
   } catch { return ""; }
+}
+
+// ── Brand-family / corporate-group deduplication ──────────────────────────────
+// Extracts a normalized "brand fingerprint" from a company name.
+// Removes legal suffixes, accents, punctuation, and common filler words
+// so that "Metro Inc.", "Métro inc", "Groupe Metro" all produce "metro".
+// Used to detect same-group duplicates (e.g. Provigo/Metro/Maxi → Metro group).
+const LEGAL_SUFFIXES = /\b(inc|ltee|ltée|ltd|corp|corporation|group|groupe|holdings|holding|international|canada|quebec|québec|national|entreprise|compagnie|co|s\.?a\.?|s\.?e\.?c\.?)\b\.?/gi;
+const FILLER_WORDS = /\b(le|la|les|de|du|des|et|the|of|and|&)\b/gi;
+
+function brandFingerprint(name) {
+  if (!name) return "";
+  return name
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(LEGAL_SUFFIXES, " ")
+    .replace(FILLER_WORDS, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(w => w.length >= 3)       // drop very short tokens
+    .sort()                            // canonical order
+    .join("-");
+}
+
+// Known retail corporate-group families: domains that belong to the same parent.
+// If a fingerprint from this list is already seen, skip the sibling.
+const RETAIL_GROUP_FAMILIES = [
+  ["metro","provigo","maxi","super-c","richelieu"],       // Metro Inc. group
+  ["sobeys","iga","safeway","thrifty"],                   // Empire / Sobeys group
+  ["loblaws","provigo","maxi","shoppers","no-frills","president-s-choice"],  // Loblaw group
+  ["couche-tard","mac-s","circle-k"],                     // Alimentation Couche-Tard
+  ["reitmans","penningtons","addition-elle","rw-co"],     // Reitmans group
+  ["groupe-bmr","rona","lowe-s"],                         // Hardware retail group
+  ["dollarama","dollar","five-and-below"],                // Dollar store group
+  ["simons","sport-expert","atmospherics"],               // La Maison Simons group
+];
+
+// Build a reverse-lookup: fingerprint → canonical group id
+const RETAIL_GROUP_MAP = new Map();
+for (let gIdx = 0; gIdx < RETAIL_GROUP_FAMILIES.length; gIdx++) {
+  for (const token of RETAIL_GROUP_FAMILIES[gIdx]) {
+    RETAIL_GROUP_MAP.set(token, gIdx);
+  }
 }
 
 const MTL_SNIPPET_RE = /\b(montr[eé]al|laval|longueuil|brossard|terrebonne|repentigny|boucherville|dorval|pointe-claire|westmount|verdun|anjou|outremont|lasalle|saint-laurent|blainville|boisbriand|mirabel|ch[aâ]teauguay|vaudreuil|lachine|ahuntsic|mtl)\b/i;
@@ -287,7 +377,6 @@ function normalizeWebResult(r, requiredSectors, _isMTL) {
   if (!domain || BLOCKED_DOMAINS.has(domain)) return { accepted: false, rejectReason: "blockedDomain" };
 
   const fullText = normText(`${title} ${snippet} ${domain}`);
-  // Supprimé: filtre MTL_SNIPPET_RE qui bloquait des résultats web pertinents
 
   let maxScore = 0;
   let bestSector = null;
@@ -296,7 +385,7 @@ function normalizeWebResult(r, requiredSectors, _isMTL) {
     const score = syns.filter(s => fullText.includes(normText(s))).length;
     if (score > maxScore) { maxScore = score; bestSector = sector; }
   }
-  // Require at least 2 synonym hits for web results (was 1) to reduce weak matches
+  // Require at least 2 synonym hits for web results to reduce weak matches
   if (requiredSectors.length > 0 && maxScore < 2) return { accepted: false, rejectReason: "noSectorMatch" };
 
   const nameMatch = title.match(/^([A-ZÀ-ÿa-zà-ÿ][^\|–\-]{2,60}?)(?:\s*[-–|]|$)/);
@@ -305,6 +394,27 @@ function normalizeWebResult(r, requiredSectors, _isMTL) {
   // Reject obvious non-company results even if domain/snippet passed
   if (/\b(top \d+|best \d+|liste|directory|classement|ranking|guide|how to|comment)\b/i.test(snippet)) {
     return { accepted: false, rejectReason: "directorySnippet" };
+  }
+
+  // ── Retail-specific web noise rejection ────────────────────────────────────
+  if (requiredSectors.includes("Commerce de détail")) {
+    // Reject shopping centres, malls, and venue operators — real estate, not retail brands
+    if (/\b(centre commercial|mall|galerie marchande|promenades|carrefour|complexe|fairview|ivanhoe|cadillac|oxford properties)\b/i.test(`${title} ${snippet}`)) {
+      return { accepted: false, rejectReason: "retail_venue_operator" };
+    }
+    // Reject trade associations, councils, and industry bodies
+    if (/\b(conseil|association|federation|chambre de commerce|retail council|cqcd|syndicat|ordre professionnel)\b/i.test(`${title} ${snippet}`)) {
+      return { accepted: false, rejectReason: "retail_trade_body" };
+    }
+    // Reject hospitality, tourism, and food-service (restaurants, hotels) — not corporate retail
+    if (/\b(hotel|restauration|restaurant|tourisme|tourism|auberge|resort|spa|hebergement)\b/i.test(`${title} ${snippet}`) &&
+        !/\b(magasin|boutique|franchise|chaine|retail|detaillant)\b/i.test(`${title} ${snippet}`)) {
+      return { accepted: false, rejectReason: "retail_hospitality_noise" };
+    }
+    // Reject wholesale / distribution (not retail-facing)
+    if (/\b(grossiste|distributeur|entrepot|cargo|fret|supply chain|3pl|4pl)\b/i.test(`${title} ${snippet}`)) {
+      return { accepted: false, rejectReason: "retail_wholesale_noise" };
+    }
   }
 
   let score = 0;
@@ -344,15 +454,24 @@ function buildQueries(sectors, loc, keywords) {
   const kwStr = (keywords || []).slice(0, 4).map(k => `"${k}"`).join(" ");
   const queries = [];
 
-  // Event-intent queries first — these are the highest-quality signal for SYNC's ICP
-  // Organizations that explicitly organize events are prime targets
-  const eventIntentSample = EVENT_INTENT_TERMS.slice(0, 6);
+  // Event-intent queries first — highest-quality signal for SYNC's ICP
   for (const sector of sectors.slice(0, 4)) {
     const syns = (SECTOR_SYNONYMS[sector] || []).slice(0, 3);
     const synStr = syns.map(s => `"${s}"`).join(" OR ");
-    // Highest-signal: sector + event intent
     queries.push(`(${synStr}) ("gala" OR "congrès" OR "assemblée générale" OR "conférence annuelle") ${locCity} ${EXCL}`);
     queries.push(`entreprises "${sector}" ("événement annuel" OR "gala" OR "congrès" OR "soirée") ${locCity} ${EXCL}`);
+  }
+
+  // ── Retail-specific queries: chain/brand focused, exclude malls and associations ──
+  if (sectors.includes("Commerce de détail")) {
+    const retailExcl = `${EXCL} -"centre commercial" -"conseil" -"association" -"chambre de commerce"`;
+    queries.push(`chaîne de magasins ${locCity} ("lancement" OR "formation" OR "réunion annuelle" OR "conférence") ${retailExcl}`);
+    queries.push(`détaillant franchise ${locCity} ("événement" OR "gala" OR "assemblée") ${retailExcl}`);
+    queries.push(`"vente au détail" entreprise ${locCity} siège social ${retailExcl}`);
+    queries.push(`marque de mode ${locCity} boutiques ${retailExcl}`);
+    queries.push(`franchiseur ${locCity} réseau de magasins ${retailExcl}`);
+    queries.push(`épicerie supermarché ${locCity} entreprise ${retailExcl}`);
+    queries.push(`détaillant alimentation ${locCity} siège social ${retailExcl}`);
   }
 
   // Standard sector queries (broader, lower signal)
@@ -516,6 +635,16 @@ Deno.serve(async (req) => {
 
   const existingProspects = await base44.entities.Prospect.filter({ campaignId }, "-created_date", 2000).catch(() => []);
   const existingDomains = new Set(existingProspects.map(p => (p.domain || "").toLowerCase()));
+  // Brand-family dedup: track fingerprints and retail group IDs already inserted
+  const seenBrandFingerprints = new Set(existingProspects.map(p => brandFingerprint(p.companyName)).filter(Boolean));
+  const seenRetailGroupIds = new Set(); // retail corporate-family dedup
+  // Pre-populate seenRetailGroupIds from existing prospects
+  for (const p of existingProspects) {
+    const fp = brandFingerprint(p.companyName);
+    for (const [token, gIdx] of RETAIL_GROUP_MAP.entries()) {
+      if (fp.includes(token)) { seenRetailGroupIds.add(gIdx); break; }
+    }
+  }
   let prospectCount = existingProspects.length;
 
   console.log(`[START] campaignId=${campaignId} target=${targetCount} existing=${prospectCount} isMTL=${isMTL} sectors=${requiredSectors.join(",")} freeSectorTerms=${freeSectorTerms.join(",")} keywords=${campaignKeywords.join(",")}`);
@@ -642,7 +771,13 @@ Deno.serve(async (req) => {
       const targetSector = matchedCanonical[0] || requiredSectors[0];
       const { score, tier, reasons, rejectReason } = computeSectorScore(e, targetSector);
 
-      // SECTOR-ONLY: plus de REJECTED — tout match secteur est accepté
+      // Hard-block sectors (e.g. retail): reject entities that match exclusions
+      if (tier === "REJECTED") {
+        rejectedCount++;
+        if (rejectedSamples.length < 5) rejectedSamples.push({ name: e.name, domain: e.domain, rejectReason });
+        continue;
+      }
+
       const entry = { kb: e, matchedCanonical, whichMode, sectorScore: score, tier, reasons };
       strictCount++;
       kbStrict.push(entry);
@@ -687,6 +822,17 @@ Deno.serve(async (req) => {
         score += kwMatches * 200;
       }
 
+      // ── Retail-specific ranking boosters ──────────────────────────────────
+      if (requiredSectors.includes("Commerce de détail")) {
+        const eBlob2 = normText([e.name, e.notes, ...parseArr(e.tags), ...parseArr(e.keywords)].filter(Boolean).join(" "));
+        // Recognizable retail brand signals — chains, franchise networks, national brands
+        if (/\b(chaine|franchise|magasin|boutique|supermarche|epicerie|detaillant|banner|enseigne)\b/.test(eBlob2)) score += 300;
+        // Multi-location / national scale signals
+        if (/\b(national|canadien|canada|pan-canadien|partout au canada|succursale|points de vente)\b/.test(eBlob2)) score += 200;
+        // Penalize thin entries with no notes/keywords (low data quality)
+        if (!e.notes && parseArr(e.keywords).length === 0) score -= 100;
+      }
+
       // Confidence score (minor weight)
       score += (e.confidenceScore || 70) * 0.2;
       return score;
@@ -706,6 +852,19 @@ Deno.serve(async (req) => {
 
       const domNorm = (kb.domain || "").toLowerCase();
       if (existingDomains.has(domNorm)) continue;
+
+      // Brand-family dedup: skip if we've already inserted a sibling from the same corporate group
+      const kbFp = brandFingerprint(kb.name);
+      if (seenBrandFingerprints.has(kbFp)) continue;
+      if (requiredSectors.includes("Commerce de détail")) {
+        // Also check retail group family dedup
+        let kbGroupId = null;
+        for (const [token, gIdx] of RETAIL_GROUP_MAP.entries()) {
+          if (kbFp.includes(token) || domNorm.includes(token)) { kbGroupId = gIdx; break; }
+        }
+        if (kbGroupId !== null && seenRetailGroupIds.has(kbGroupId)) continue;
+        if (kbGroupId !== null) seenRetailGroupIds.add(kbGroupId);
+      }
 
       const displaySectors = (matchedCanonical && matchedCanonical.length > 0) ? matchedCanonical : requiredSectors.slice(0, 1);
       const displayLabel = displaySectors[0] || kb.industryLabel || null;
@@ -734,6 +893,7 @@ Deno.serve(async (req) => {
       }
 
       existingDomains.add(domNorm);
+      seenBrandFingerprints.add(kbFp);
       kbAccepted++;
       prospectCount++;
 
@@ -803,6 +963,18 @@ Deno.serve(async (req) => {
             const domNorm = norm.domain.toLowerCase();
             if (existingDomains.has(domNorm)) continue;
 
+            // Brand-family dedup for web results
+            const webFp = brandFingerprint(norm.companyName);
+            if (seenBrandFingerprints.has(webFp)) continue;
+            if (requiredSectors.includes("Commerce de détail")) {
+              let webGroupId = null;
+              for (const [token, gIdx] of RETAIL_GROUP_MAP.entries()) {
+                if (webFp.includes(token) || domNorm.includes(token)) { webGroupId = gIdx; break; }
+              }
+              if (webGroupId !== null && seenRetailGroupIds.has(webGroupId)) continue;
+              if (webGroupId !== null) seenRetailGroupIds.add(webGroupId);
+            }
+
             let kbEntityId = null;
             if (!kbDomainSet.has(domNorm) && norm.score >= 80 && norm.eventHits >= 1) {
               try {
@@ -862,6 +1034,7 @@ Deno.serve(async (req) => {
             }
 
             existingDomains.add(domNorm);
+            seenBrandFingerprints.add(webFp);
             webAccepted++;
             prospectCount++;
 
@@ -903,6 +1076,18 @@ Deno.serve(async (req) => {
           const domNorm = norm.domain.toLowerCase();
           if (existingDomains.has(domNorm)) continue;
 
+          // Brand-family dedup for SERP results
+          const serpFp = brandFingerprint(norm.companyName);
+          if (seenBrandFingerprints.has(serpFp)) continue;
+          if (requiredSectors.includes("Commerce de détail")) {
+            let serpGroupId = null;
+            for (const [token, gIdx] of RETAIL_GROUP_MAP.entries()) {
+              if (serpFp.includes(token) || domNorm.includes(token)) { serpGroupId = gIdx; break; }
+            }
+            if (serpGroupId !== null && seenRetailGroupIds.has(serpGroupId)) continue;
+            if (serpGroupId !== null) seenRetailGroupIds.add(serpGroupId);
+          }
+
           try {
             await createProspectWithRetry(base44, {
               campaignId,
@@ -927,6 +1112,7 @@ Deno.serve(async (req) => {
           }
 
           existingDomains.add(domNorm);
+          seenBrandFingerprints.add(serpFp);
           webAccepted++;
           prospectCount++;
         }
