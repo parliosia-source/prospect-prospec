@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { ArrowLeft, Globe, Brain, RefreshCw, Calendar, MessageSquare, Building2, User, Clock, Send, Plus, CheckCircle2, PhoneCall } from "lucide-react";
+import SentMessageCard from "@/components/messages/SentMessageCard";
 import ActivityTimeline from "@/components/leads/ActivityTimeline";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -295,16 +296,7 @@ export default function LeadDetail() {
           </h3>
           <div className="space-y-3">
             {sentMessages.map(m => (
-              <div key={m.id} className="p-3 bg-slate-50 rounded-lg border text-sm">
-                <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${m.channel === "LINKEDIN" ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
-                    {m.channel}
-                  </span>
-                  <span className="text-xs text-slate-400">{m.sentAt ? format(new Date(m.sentAt), "d MMM yyyy à HH:mm", { locale: fr }) : ""}</span>
-                </div>
-                {(m.subject || m.editedSubject) && <div className="text-xs font-medium text-slate-600 mb-1">Sujet: {m.editedSubject || m.subject}</div>}
-                <div className="text-xs text-slate-600 line-clamp-3 whitespace-pre-wrap">{m.editedBody || m.body}</div>
-              </div>
+              <SentMessageCard key={m.id} message={m} />
             ))}
           </div>
         </div>
