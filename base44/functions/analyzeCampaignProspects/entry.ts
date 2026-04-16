@@ -233,7 +233,7 @@ Réponds en JSON:
             ownerUserId:    prospect.ownerUserId,
             title,
             hasEmail:       false,
-            contactPageUrl: `https://${prospect.domain}/contact`,
+            contactPageUrl: "", // Do not fabricate /contact URLs that may not exist
             source:         "SERP",
           });
         }

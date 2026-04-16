@@ -499,6 +499,8 @@ Réponds en JSON:
 
   if (savedContacts.length === 0 && analysis.decisionMakerTitles?.length > 0) {
     log("Creating stub contacts from AI-suggested titles...");
+    // Use a verified contact page URL from the crawl, or leave empty (no fabricated URLs)
+    const verifiedContactPage = pages.find(p => /contact|nous-joindre/.test(p.url))?.url || "";
     for (const title of analysis.decisionMakerTitles.slice(0, 2)) {
       try {
         await base44.entities.Contact.create({
@@ -506,7 +508,7 @@ Réponds en JSON:
           ownerUserId: prospect.ownerUserId,
           title,
           hasEmail: false,
-          contactPageUrl: `https://${prospect.domain}/contact`,
+          contactPageUrl: verifiedContactPage,
           source: "SERP",
         });
         savedContacts.push({ title, stub: true });
