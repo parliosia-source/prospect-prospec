@@ -296,10 +296,16 @@ function normalizeWebResult(r, requiredSectors, _isMTL) {
     const score = syns.filter(s => fullText.includes(normText(s))).length;
     if (score > maxScore) { maxScore = score; bestSector = sector; }
   }
-  if (requiredSectors.length > 0 && maxScore < 1) return { accepted: false, rejectReason: "noSectorMatch" };
+  // Require at least 2 synonym hits for web results (was 1) to reduce weak matches
+  if (requiredSectors.length > 0 && maxScore < 2) return { accepted: false, rejectReason: "noSectorMatch" };
 
   const nameMatch = title.match(/^([A-ZÀ-ÿa-zà-ÿ][^\|–\-]{2,60}?)(?:\s*[-–|]|$)/);
   const companyName = nameMatch ? nameMatch[1].trim() : title.split("|")[0].slice(0, 100).trim();
+
+  // Reject obvious non-company results even if domain/snippet passed
+  if (/\b(top \d+|best \d+|liste|directory|classement|ranking|guide|how to|comment)\b/i.test(snippet)) {
+    return { accepted: false, rejectReason: "directorySnippet" };
+  }
 
   let score = 0;
   if (maxScore >= 4) score += 40; else if (maxScore >= 2) score += 25; else score += 10;
@@ -307,8 +313,29 @@ function normalizeWebResult(r, requiredSectors, _isMTL) {
   if (domain.length < 40 && !/directory|pages|annuaire|list|rank|top|blog|news|review/.test(domain)) score += 20;
   if (snippet.length > 80) score += 10;
 
-  return { accepted: true, companyName, website: url, domain, snippet, title, bestSector, score };
+  // Event-signal bonus: snippet mentions terms that strongly indicate the org organizes events
+  const snippetNorm = normText(snippet);
+  const eventHits = EVENT_SIGNAL_TERMS_NORM.filter(t => snippetNorm.includes(t)).length;
+  if (eventHits >= 2) score += 35;      // strong event signal — major boost
+  else if (eventHits === 1) score += 15; // weak signal — modest boost
+
+  return { accepted: true, companyName, website: url, domain, snippet, title, bestSector, score, eventHits };
 }
+
+// ── Event-intent vocabulary for prospect search ───────────────────────────────
+// These terms signal that an organization *organizes* events — core ICP for SYNC
+const EVENT_INTENT_TERMS = [
+  "congrès annuel", "gala annuel", "assemblée générale", "conférence annuelle",
+  "événement corporatif", "corporate event", "townhall", "séminaire", "formation interne",
+  "journée recognition", "soirée gala", "remise de prix", "colloque", "symposium",
+  "webdiffusion", "hybride", "assemblée des membres",
+];
+// Short terms used in snippet scoring
+const EVENT_SIGNAL_TERMS_NORM = [
+  "congres","gala","assemblee","conference","evenement","colloque","symposium",
+  "seminaire","formation","townhall","webdiffusion","hybride","ceremonie","remise de prix",
+  "soiree","banquet","convention","forum","sommet","summit","annual meeting","agm","aga",
+];
 
 // ── Brave query builder ────────────────────────────────────────────────────────
 const EXCL = '-site:linkedin.com -site:facebook.com -site:glassdoor.com -site:indeed.com -site:eventbrite.com -site:wikipedia.org';
@@ -316,14 +343,27 @@ function buildQueries(sectors, loc, keywords) {
   const locCity = loc.split(",")[0].trim();
   const kwStr = (keywords || []).slice(0, 4).map(k => `"${k}"`).join(" ");
   const queries = [];
+
+  // Event-intent queries first — these are the highest-quality signal for SYNC's ICP
+  // Organizations that explicitly organize events are prime targets
+  const eventIntentSample = EVENT_INTENT_TERMS.slice(0, 6);
+  for (const sector of sectors.slice(0, 4)) {
+    const syns = (SECTOR_SYNONYMS[sector] || []).slice(0, 3);
+    const synStr = syns.map(s => `"${s}"`).join(" OR ");
+    // Highest-signal: sector + event intent
+    queries.push(`(${synStr}) ("gala" OR "congrès" OR "assemblée générale" OR "conférence annuelle") ${locCity} ${EXCL}`);
+    queries.push(`entreprises "${sector}" ("événement annuel" OR "gala" OR "congrès" OR "soirée") ${locCity} ${EXCL}`);
+  }
+
+  // Standard sector queries (broader, lower signal)
   for (const sector of sectors.slice(0, 6)) {
     const syns = (SECTOR_SYNONYMS[sector] || []).slice(0, 5);
     const synStr = syns.slice(0, 3).map(s => `"${s}"`).join(" OR ");
     queries.push(`entreprises "${sector}" ${locCity} ${EXCL}`);
-    queries.push(`companies "${sector}" ${locCity} ${EXCL}`);
     if (synStr) queries.push(`(${synStr}) entreprises ${locCity} ${EXCL}`);
     if (kwStr) queries.push(`entreprises "${sector}" ${kwStr} ${locCity} ${EXCL}`);
   }
+
   return [...new Set(queries)];
 }
 
@@ -614,17 +654,40 @@ Deno.serve(async (req) => {
     const normRequired = requiredSectors.map(normSector);
     function rankScore(e, sectorScore) {
       let score = sectorScore * 10; // base from sector score
+
+      // Exact primaryTheme match → major boost
       if (normRequired.includes(normSector(e.primaryTheme))) score += 1000;
+
+      // Theme confidence
       let tcRaw2 = typeof e.themeConfidence === "number" ? e.themeConfidence : (parseFloat(e.themeConfidence) || 55);
       const tcNorm = tcRaw2 > 1 ? tcRaw2 / 100 : tcRaw2;
       score += tcNorm * 100;
-      if (parseArr(e.eventSignals).length > 0) score += 10;
-      // Keyword boost from campaign keywords
+
+      // ── Event signals: core ICP signal for SYNC — heavily weighted ────────
+      const eventSigs = parseArr(e.eventSignals);
+      if (eventSigs.length >= 3) score += 800;       // strong: org clearly runs events
+      else if (eventSigs.length >= 1) score += 400;  // moderate: some event signal
+
+      // KB keywords that overlap with event-intent vocabulary
+      const kbKeywords = parseArr(e.keywords).map(normText);
+      const eventKwHits = EVENT_SIGNAL_TERMS_NORM.filter(t => kbKeywords.some(kw => kw.includes(t))).length;
+      if (eventKwHits >= 2) score += 500;
+      else if (eventKwHits === 1) score += 200;
+
+      // Notes/tags mention event terms
+      const notesNorm = normText([e.notes, ...parseArr(e.tags)].filter(Boolean).join(" "));
+      const eventNotesHits = EVENT_SIGNAL_TERMS_NORM.filter(t => notesNorm.includes(t)).length;
+      if (eventNotesHits >= 2) score += 300;
+      else if (eventNotesHits === 1) score += 100;
+
+      // Campaign keyword match boost
       if (campaignKwNorm.length > 0) {
         const eBlob = normText([e.name, e.normalizedName, ...parseArr(e.keywords), e.notes, ...parseArr(e.tags)].filter(Boolean).join(" "));
         const kwMatches = campaignKwNorm.filter(kw => eBlob.includes(kw)).length;
         score += kwMatches * 200;
       }
+
+      // Confidence score (minor weight)
       score += (e.confidenceScore || 70) * 0.2;
       return score;
     }
@@ -741,7 +804,7 @@ Deno.serve(async (req) => {
             if (existingDomains.has(domNorm)) continue;
 
             let kbEntityId = null;
-            if (!kbDomainSet.has(domNorm) && norm.score >= 75) {
+            if (!kbDomainSet.has(domNorm) && norm.score >= 80 && norm.eventHits >= 1) {
               try {
                 const todayStr = new Date().toISOString().split("T")[0];
                 const created = await base44.asServiceRole.entities.KBEntityV3.create({
@@ -791,7 +854,7 @@ Deno.serve(async (req) => {
                 serpSnippet: norm.snippet,
                 sourceUrl: norm.website,
                 relevanceScore: norm.score,
-                relevanceReasons: ["tier:WEB", `webScore:${norm.score}`],
+                relevanceReasons: ["tier:WEB", `webScore:${norm.score}`, ...(norm.eventHits > 0 ? [`eventSignals:${norm.eventHits}`] : [])],
               }, retryStats);
             } catch (err) {
               if (retryStats.rateLimitExhausted) { stopReason = "RATE_LIMIT_CHECKPOINT"; break; }
