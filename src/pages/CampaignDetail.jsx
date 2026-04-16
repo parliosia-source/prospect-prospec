@@ -76,20 +76,29 @@ export default function CampaignDetail() {
     loadAll();
   }, [campaignId]);
 
-  // Poll while RUNNING (search) OR analysis RUNNING — fast at first, slower after 60s
+  // Poll while RUNNING (search) OR analysis RUNNING — fixed interval, no stacking
   const pollStartRef = useRef(null);
   useEffect(() => {
     const shouldPoll = campaign?.status === "RUNNING" || campaign?.analysisStatus === "RUNNING";
+    // Always clear any existing interval first
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
     if (shouldPoll) {
       if (!pollStartRef.current) pollStartRef.current = Date.now();
-      const elapsed = Date.now() - (pollStartRef.current || Date.now());
-      const interval = elapsed < 60000 ? 2000 : 5000;
+      const elapsed = Date.now() - pollStartRef.current;
+      const interval = elapsed < 60000 ? 3000 : 6000;
       pollRef.current = setInterval(() => loadAll(), interval);
     } else {
-      clearInterval(pollRef.current);
       pollStartRef.current = null;
     }
-    return () => clearInterval(pollRef.current);
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
   }, [campaign?.status, campaign?.analysisStatus]);
 
   const loadAll = async () => {

@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
 const OPENAI_KEY  = Deno.env.get("OPENAI_API_KEY");
 const HUNTER_KEY  = Deno.env.get("HUNTER_API_KEY");
@@ -308,80 +308,86 @@ Deno.serve(async (req) => {
   let failed = 0;
   const BATCH = 2;
 
-  for (let i = 0; i < prospects.length; i += BATCH) {
-    const batch = prospects.slice(i, i + BATCH);
+  // ── try/finally guarantees finalization even on Deno timeout or uncaught error ──
+  try {
+    for (let i = 0; i < prospects.length; i += BATCH) {
+      const batch = prospects.slice(i, i + BATCH);
 
-    const doneCount = analyzed + failed;
-    const pct = Math.min(Math.round((doneCount / total) * 100), 99);
-    await base44.entities.Campaign.update(campaignId, {
-      analysisLastHeartbeatAt: new Date().toISOString(),
-      analysisProgressPct:     pct,
-      analysisDoneCount:       doneCount,
-    });
+      const doneCount = analyzed + failed;
+      const pct = Math.min(Math.round((doneCount / total) * 100), 99);
+      await base44.entities.Campaign.update(campaignId, {
+        analysisLastHeartbeatAt: new Date().toISOString(),
+        analysisProgressPct:     pct,
+        analysisDoneCount:       doneCount,
+      });
 
-    const settled = await Promise.allSettled(batch.map(async (prospect) => {
-      try {
-        // Use V2 analysis via function invocation
-        const res = await base44.functions.invoke("analyzeProspect", { prospectId: prospect.id });
-        return { success: true };
-      } catch (e) {
-        const errMsg = (e.message || "Erreur inconnue").slice(0, 500);
-        console.error(`Failed prospect ${prospect.id}:`, errMsg);
+      const settled = await Promise.allSettled(batch.map(async (prospect) => {
         try {
-          await base44.entities.Prospect.update(prospect.id, {
-            status:          "FAILED_ANALYSIS",
-            analysisError:   errMsg,
-            analysisErrorAt: new Date().toISOString(),
-          });
-        } catch (_) {}
-        return { success: false };
-      }
-    }));
+          await base44.functions.invoke("analyzeProspect", { prospectId: prospect.id });
+          return { success: true };
+        } catch (e) {
+          const errMsg = (e.message || "Erreur inconnue").slice(0, 500);
+          console.error(`Failed prospect ${prospect.id}:`, errMsg);
+          try {
+            await base44.entities.Prospect.update(prospect.id, {
+              status:          "FAILED_ANALYSIS",
+              analysisError:   errMsg,
+              analysisErrorAt: new Date().toISOString(),
+            });
+          } catch (_) {}
+          return { success: false };
+        }
+      }));
 
-    analyzed += settled.filter(r => r.value?.success === true).length;
-    failed   += settled.filter(r => r.value?.success === false).length;
+      analyzed += settled.filter(r => r.value?.success === true).length;
+      failed   += settled.filter(r => r.value?.success === false).length;
 
-    const newPct = Math.min(Math.round(((analyzed + failed) / total) * 100), 99);
+      const newPct = Math.min(Math.round(((analyzed + failed) / total) * 100), 99);
+      await base44.entities.Campaign.update(campaignId, {
+        analysisLastHeartbeatAt: new Date().toISOString(),
+        analysisProgressPct:     newPct,
+        analysisDoneCount:       analyzed + failed,
+      });
+    }
+  } finally {
+    // Always finalize campaign — even if Deno hits its execution timeout mid-loop
+    const finalProspects = await base44.entities.Prospect.filter({ campaignId }, "-created_date", 500).catch(() => []);
+    const countAnalyzed  = finalProspects.filter(p => ["ANALYSÉ","QUALIFIÉ","REJETÉ","EXPORTÉ"].includes(p.status)).length;
+    const countQualified = finalProspects.filter(p => p.status === "QUALIFIÉ").length;
+    const countRejected  = finalProspects.filter(p => p.status === "REJETÉ").length;
+    const durationMs     = Date.now() - startedAt;
+    const existingUsage  = campaign.toolUsage || {};
+
+    // Mark COMPLETED if all done, FAILED if nothing was analyzed, else COMPLETED with partial counts
+    const finalStatus = (analyzed + failed) === 0 && total > 0 ? "FAILED" : "COMPLETED";
+
     await base44.entities.Campaign.update(campaignId, {
-      analysisLastHeartbeatAt: new Date().toISOString(),
-      analysisProgressPct:     newPct,
+      analysisStatus:          finalStatus,
+      analysisProgressPct:     100,
       analysisDoneCount:       analyzed + failed,
-    });
+      countAnalyzed,
+      countQualified,
+      countRejected,
+      analysisLastHeartbeatAt: new Date().toISOString(),
+      toolUsage: {
+        ...existingUsage,
+        freshnessChecksDone,
+        freshnessChecksMax:        KB_FRESHNESS_MAX,
+        braveRateLimitRemaining:   braveRLState.remaining,
+        brave429Count:             (existingUsage.brave429Count || 0) + braveRLState.count429,
+      },
+    }).catch(e => console.error("Failed to finalize campaign:", e.message));
+
+    await base44.entities.ActivityLog.create({
+      ownerUserId: user.email,
+      actionType:  "ANALYZE_CAMPAIGN_PROSPECTS",
+      entityType:  "Campaign",
+      entityId:    campaignId,
+      payload:     { analyzed, failed, total, durationMs, mode, freshnessChecksDone },
+      status:      analyzed > 0 ? "SUCCESS" : "ERROR",
+      errorMessage: failed > 0 ? `${failed}/${total} prospects ont échoué l'analyse` : null,
+    }).catch(() => {});
   }
-
-  const finalProspects = await base44.entities.Prospect.filter({ campaignId }, "-created_date", 500);
-  const countAnalyzed  = finalProspects.filter(p => ["ANALYSÉ","QUALIFIÉ","REJETÉ","EXPORTÉ"].includes(p.status)).length;
-  const countQualified = finalProspects.filter(p => p.status === "QUALIFIÉ").length;
-  const countRejected  = finalProspects.filter(p => p.status === "REJETÉ").length;
-  const durationMs     = Date.now() - startedAt;
-  const existingUsage  = campaign.toolUsage || {};
-
-  await base44.entities.Campaign.update(campaignId, {
-    analysisStatus:          "COMPLETED",
-    analysisProgressPct:     100,
-    analysisDoneCount:       analyzed + failed,
-    countAnalyzed,
-    countQualified,
-    countRejected,
-    analysisLastHeartbeatAt: new Date().toISOString(),
-    toolUsage: {
-      ...existingUsage,
-      freshnessChecksDone,
-      freshnessChecksMax:        KB_FRESHNESS_MAX,
-      braveRateLimitRemaining:   braveRLState.remaining,
-      brave429Count:             (existingUsage.brave429Count || 0) + braveRLState.count429,
-    },
-  });
-
-  await base44.entities.ActivityLog.create({
-    ownerUserId: user.email,
-    actionType:  "ANALYZE_CAMPAIGN_PROSPECTS",
-    entityType:  "Campaign",
-    entityId:    campaignId,
-    payload:     { analyzed, failed, total, durationMs, mode, freshnessChecksDone },
-    status:      analyzed > 0 ? "SUCCESS" : "ERROR",
-    errorMessage: failed > 0 ? `${failed}/${total} prospects ont échoué l'analyse` : null,
-  });
 
   return Response.json({ success: true, analyzed, failed, total, mode, freshnessChecksDone });
 });
