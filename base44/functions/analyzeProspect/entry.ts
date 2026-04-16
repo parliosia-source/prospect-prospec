@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
 const GEMINI_KEY      = Deno.env.get("GEMINI_API_KEY");
 const BROWSERLESS_KEY = Deno.env.get("BROWSERLESS_API_KEY");
@@ -87,7 +87,7 @@ async function smartFetch(url) {
   return null;
 }
 
-// ── Crawl multiple pages ──────────────────────────────────────────────────────
+// ── Crawl multiple pages — parallel with hard cap ────────────────────────────
 const SUBPAGES = [
   "", "/about", "/a-propos", "/team", "/equipe", "/notre-equipe",
   "/leadership", "/management", "/contact", "/nous-joindre"
@@ -95,16 +95,14 @@ const SUBPAGES = [
 
 async function crawlSite(domain) {
   const base = `https://${domain}`;
-  const pages = [];
-  let scanned = 0;
-  for (const path of SUBPAGES) {
-    if (scanned >= 10) break;
-    const url = base + path;
-    scanned++;
-    const result = await smartFetch(url);
-    if (result && result.text.length > 200) pages.push(result);
-  }
-  return { pages, scannedCount: scanned };
+  // Fire all subpages in parallel — each has its own internal timeout via fetchWithTimeout
+  const results = await Promise.allSettled(
+    SUBPAGES.map(path => smartFetch(base + path))
+  );
+  const pages = results
+    .filter(r => r.status === "fulfilled" && r.value && r.value.text.length > 200)
+    .map(r => r.value);
+  return { pages, scannedCount: SUBPAGES.length };
 }
 
 // ── Gemini call ───────────────────────────────────────────────────────────────
@@ -318,6 +316,9 @@ async function saveContacts(base44, prospectId, prospect, contacts) {
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
+// Hard wall: if analyzeProspect takes > 50s it must resolve (not hang the orchestrator)
+const GLOBAL_TIMEOUT_MS = 50000;
+
 Deno.serve(async (req) => {
   const base44 = createClientFromRequest(req);
   const user = await base44.auth.me();
@@ -365,6 +366,27 @@ Deno.serve(async (req) => {
 
   log(`START: ${prospect.companyName} (${prospect.domain})`);
 
+  // Wrap entire analysis in a race against global timeout
+  // If it times out, mark prospect as FAILED_ANALYSIS so orchestrator can continue
+  const analysisPromise = runAnalysis(base44, user, prospect, prospectId, logApiUsage, log, logs);
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`Timeout after ${GLOBAL_TIMEOUT_MS}ms`)), GLOBAL_TIMEOUT_MS)
+  );
+
+  try {
+    return await Promise.race([analysisPromise, timeoutPromise]);
+  } catch (timeoutErr) {
+    console.error(`[ANALYZE] Global timeout for ${prospectId}:`, timeoutErr.message);
+    await base44.entities.Prospect.update(prospectId, {
+      status: "FAILED_ANALYSIS",
+      analysisError: timeoutErr.message,
+      analysisErrorAt: new Date().toISOString(),
+    }).catch(() => {});
+    return Response.json({ error: timeoutErr.message, prospectId }, { status: 408 });
+  }
+});
+
+async function runAnalysis(base44, user, prospect, prospectId, logApiUsage, log, logs) {
   // ── PHASE 1: Crawl (smartFetch with Browserless fallback) ───────────────────
   log("Phase 1: Crawling site with smartFetch...");
   const { pages, scannedCount } = await crawlSite(prospect.domain);
@@ -559,4 +581,4 @@ Réponds en JSON:
     crawl: { pagesScanned: scannedCount, pagesWithContent: pages.length, hasTeamPage },
     logs,
   });
-});
+}

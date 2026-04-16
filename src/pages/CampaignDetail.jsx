@@ -383,13 +383,14 @@ export default function CampaignDetail() {
 
       {/* Admin debug summary — only visible to admins */}
       {campaign?.lastRunDebugSummary && user?.role === "admin" && (
-        <div className="mb-3 px-3 py-2 bg-slate-800 text-slate-300 rounded-lg text-xs font-mono flex items-start gap-2">
-          <span className="text-slate-500 shrink-0">[debug]</span>
-          <span>{campaign.lastRunDebugSummary}</span>
-          {campaign.toolUsage?.rateLimitHitCount > 0 && (
-            <span className="ml-auto text-yellow-400 shrink-0">⚠ {campaign.toolUsage.rateLimitHitCount} rate-limit hits</span>
-          )}
-        </div>
+        <details className="mb-3 cursor-pointer">
+          <summary className="px-3 py-1.5 bg-slate-800 text-slate-400 rounded-lg text-xs font-mono select-none hover:text-slate-200">
+            [debug] {campaign.toolUsage?.rateLimitHitCount > 0 && <span className="text-yellow-400 ml-2">⚠ {campaign.toolUsage.rateLimitHitCount} rate-limit hits</span>}
+          </summary>
+          <div className="mt-1 px-3 py-2 bg-slate-900 text-slate-300 rounded-lg text-xs font-mono break-all">
+            {campaign.lastRunDebugSummary}
+          </div>
+        </details>
       )}
 
       {/* Tabs */}
