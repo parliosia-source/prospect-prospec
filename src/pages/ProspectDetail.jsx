@@ -309,12 +309,18 @@ export default function ProspectDetail() {
           <div className="space-y-2">
             {contacts.map(c => {
               const name = safeFullName(c);
+              const isStub = c.isStub || (!name && !c.email);
               const showLinkedin = isValidLinkedIn(c.linkedinUrl);
               return (
-                <div key={c.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                <div key={c.id} className={`flex items-center justify-between p-3 rounded-lg ${isStub ? "bg-amber-50 border border-amber-100" : "bg-slate-50"}`}>
                   <div>
-                    <div className="text-sm font-medium text-slate-800">
-                      {name || (c.title ? c.title : "Contact non identifié")}
+                    <div className="flex items-center gap-2">
+                      <div className={`text-sm font-medium ${isStub ? "text-amber-800 italic" : "text-slate-800"}`}>
+                        {name || (c.title ? c.title : "Contact non identifié")}
+                      </div>
+                      {isStub && (
+                        <span className="text-xs px-1.5 py-0.5 bg-amber-100 text-amber-600 rounded font-medium">rôle non vérifié</span>
+                      )}
                     </div>
                     {name && c.title && <div className="text-xs text-slate-500">{c.title}</div>}
                     {c.email && <div className="text-xs text-blue-600 mt-0.5">{c.email} {c.emailConfidence ? `(${c.emailConfidence}%)` : ""}</div>}

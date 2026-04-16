@@ -90,12 +90,12 @@ async function smartFetch(url) {
 // ── Crawl multiple pages — parallel with hard cap ────────────────────────────
 const SUBPAGES = [
   "", "/about", "/a-propos", "/team", "/equipe", "/notre-equipe",
-  "/leadership", "/management", "/contact", "/nous-joindre"
+  "/leadership", "/management", "/contact", "/nous-joindre",
+  "/qui-sommes-nous", "/en/about", "/en/team", "/direction", "/gouvernance"
 ];
 
 async function crawlSite(domain) {
   const base = `https://${domain}`;
-  // Fire all subpages in parallel — each has its own internal timeout via fetchWithTimeout
   const results = await Promise.allSettled(
     SUBPAGES.map(path => smartFetch(base + path))
   );
@@ -115,7 +115,7 @@ async function callGemini(prompt) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
+        generationConfig: { responseMimeType: "application/json", temperature: 0.1 }
       })
     }, 30000);
     if (!res.ok) {
@@ -132,7 +132,7 @@ async function callGemini(prompt) {
   }
 }
 
-// ── OpenAI fallback ───────────────────────────────────────────────────────────
+// ── OpenAI call ───────────────────────────────────────────────────────────────
 async function callOpenAI(messages) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -144,10 +144,10 @@ async function callOpenAI(messages) {
 }
 
 // ── Brave / SERP helpers ──────────────────────────────────────────────────────
-async function braveQuery(query, count = 5) {
+async function braveQuery(query, count = 8) {
   if (!BRAVE_KEY) return [];
   try {
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}&country=ca&search_lang=fr`;
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}&country=ca&search_lang=fr&extra_snippets=true`;
     const res = await fetchWithTimeout(url, {
       headers: { "Accept": "application/json", "X-Subscription-Token": BRAVE_KEY }
     }, 8000);
@@ -157,7 +157,7 @@ async function braveQuery(query, count = 5) {
   } catch (_) { return []; }
 }
 
-async function serpQuery(query, count = 5) {
+async function serpQuery(query, count = 8) {
   if (!SERPAPI_KEY) return [];
   try {
     const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&num=${count}&api_key=${SERPAPI_KEY}`;
@@ -167,7 +167,7 @@ async function serpQuery(query, count = 5) {
   } catch (_) { return []; }
 }
 
-// ── Gemini contact extraction ─────────────────────────────────────────────────
+// ── Gemini contact extraction from crawled site text ─────────────────────────
 async function extractContactsGemini(companyName, domain, crawledText) {
   const prompt = `Tu es un expert en recherche de contacts B2B pour une entreprise de production audiovisuelle événementielle à Montréal.
 
@@ -187,66 +187,104 @@ RÔLES PRIORITAIRES (par ordre):
 5. Développement des affaires
 6. Expérience client / Brand
 
+RÈGLES STRICTES:
+- N'invente AUCUN nom, titre ou email. Utilise UNIQUEMENT ce qui est dans le texte.
+- Pour chaque contact, indique "verified": true uniquement si le nom complet est présent dans le texte.
+- Si seulement un titre/rôle est trouvé (sans nom), inclus-le quand même avec name: "" et verified: false.
+
 Extrais TOUS les contacts trouvés dans le texte. Pour chaque contact, fournis:
-- name: nom complet
+- name: nom complet tel que trouvé dans le texte (ou "" si absent)
 - title: titre/poste exact tel que trouvé
-- linkedin_url: URL LinkedIn si trouvée (sinon "")
-- email: email si trouvé (sinon "")
+- linkedin_url: URL LinkedIn si trouvée dans le texte (sinon "")
+- email: email si trouvé dans le texte (sinon "")
 - role_category: une des catégories prioritaires ci-dessus
-- confidence_score: 0-100
+- confidence_score: 0-100 (basé sur la qualité des données trouvées, pas sur une supposition)
+- verified: true si nom complet trouvé dans le texte, false sinon
 
 Réponds en JSON strict:
 {"contacts": [...]}
 
-Si aucun contact n'est trouvé dans le texte, retourne {"contacts": []}.
-N'invente AUCUN nom ou contact.`;
+Si aucun contact n'est trouvé dans le texte, retourne {"contacts": []}.`;
 
   return await callGemini(prompt);
 }
 
-// ── Fallback: Gemini LinkedIn search ──────────────────────────────────────────
-async function geminiLinkedInSearch(companyName, domain) {
+// ── LinkedIn search via web — runs in parallel with multiple queries ──────────
+async function linkedInSearch(companyName, domain) {
+  // Multiple query angles run in parallel for better recall
   const queries = [
-    `site:linkedin.com/in "${companyName}" marketing OR communications Montréal`,
-    `site:linkedin.com/in "${companyName}" directeur OR VP OR responsable événements`,
-    `site:linkedin.com/in "${domain}" marketing OR communications OR événements`,
+    `site:linkedin.com/in "${companyName}" (directeur OR directrice OR VP OR responsable OR manager OR gestionnaire) (marketing OR communications OR événements OR events)`,
+    `site:linkedin.com/in "${companyName}" (marketing OR communications OR événements OR "ressources humaines" OR "développement")`,
+    `site:linkedin.com/in "${domain}" (directeur OR VP OR responsable OR manager)`,
+    `"${companyName}" linkedin.com/in directeur communications OR "directeur marketing" OR "VP marketing" OR "responsable événements"`,
   ];
 
+  const seen = new Set();
   const allResults = [];
-  for (const q of queries) {
-    let results = await braveQuery(q, 8);
-    if (results.length === 0) results = await serpQuery(q, 5);
-    for (const r of results) {
-      const url = r.url || r.link || "";
-      if (url.includes("linkedin.com/in/")) {
-        allResults.push({ url, title: r.title || "", snippet: r.description || r.snippet || "" });
-      }
+
+  // Run all queries in parallel
+  const batchResults = await Promise.allSettled(
+    queries.map(q => braveQuery(q, 8))
+  );
+
+  for (const batch of batchResults) {
+    if (batch.status !== "fulfilled") continue;
+    for (const r of batch.value) {
+      const url = (r.url || r.link || "").split("?")[0].replace(/\/$/, "");
+      if (!url.includes("linkedin.com/in/")) continue;
+      if (seen.has(url)) continue;
+      seen.add(url);
+      // Use extra_snippets for richer context
+      const snippet = [r.description, ...(r.extra_snippets || [])].filter(Boolean).join(" ").slice(0, 300);
+      allResults.push({ url, title: r.title || "", snippet });
     }
-    if (allResults.length >= 10) break;
+  }
+
+  // SERP fallback only if Brave returned very little
+  if (allResults.length < 3 && SERPAPI_KEY) {
+    const serpResults = await serpQuery(
+      `site:linkedin.com/in "${companyName}" marketing OR communications OR événements`, 8
+    );
+    for (const r of serpResults) {
+      const url = (r.link || "").split("?")[0].replace(/\/$/, "");
+      if (!url.includes("linkedin.com/in/") || seen.has(url)) continue;
+      seen.add(url);
+      allResults.push({ url, title: r.title || "", snippet: r.snippet || "" });
+    }
   }
 
   if (allResults.length === 0) return [];
 
-  const prompt = `Tu es un expert en identification de contacts B2B.
+  // Parse with Gemini — stricter prompt: must verify affiliation, allow partial names
+  const prompt = `Tu es un expert en identification de contacts B2B. Tu dois être PRÉCIS et ne jamais inventer.
 
-ENTREPRISE: ${companyName} (${domain})
-CONTEXTE: Services événementiels B2B à Montréal.
+ENTREPRISE: ${companyName} (domaine: ${domain})
+OBJECTIF: Services événementiels B2B à Montréal — trouver décideurs en marketing, communications, événements, RH, direction.
 
-Voici des résultats de recherche LinkedIn pour cette entreprise:
-${allResults.map((r, i) => `${i + 1}. URL: ${r.url}\n   Titre: ${r.title}\n   Extrait: ${r.snippet}`).join("\n\n")}
+Voici des résultats de recherche LinkedIn:
+${allResults.slice(0, 15).map((r, i) => `${i + 1}. URL: ${r.url}\n   Titre page: ${r.title}\n   Extrait: ${r.snippet}`).join("\n\n")}
 
-Pour chaque résultat qui semble être un employé de ${companyName} dans un rôle pertinent (marketing, communications, événements, RH, VP, direction, développement affaires, expérience client, brand), extrais:
-- name: nom complet de la personne
-- title: son poste/titre
-- linkedin_url: l'URL LinkedIn nettoyée
-- email: "" (inconnu)
-- role_category: catégorie du rôle
+RÈGLES:
+1. N'inclus QUE les personnes qui travaillent CLAIREMENT chez ${companyName} (le titre ou l'extrait doit le confirmer).
+2. Extrais le nom depuis le titre de la page LinkedIn (format habituel: "Prénom Nom - Titre - Entreprise").
+3. Si le nom ne peut pas être extrait du texte fourni, met name: "".
+4. Le champ "verified" = true uniquement si le nom complet est clairement présent et le lien avec ${companyName} est confirmé.
+5. Ne jamais inventer un nom, un email, ou une affiliation.
+6. Inclus maximum 5 contacts.
+
+Pour chaque contact pertinent, fournis:
+- name: nom extrait du texte (ou "" si impossible à extraire)
+- title: poste/titre extrait du texte
+- linkedin_url: URL LinkedIn nettoyée (sans paramètres)
+- email: "" (toujours vide — non disponible via LinkedIn public)
+- role_category: Marketing|Communications|Événements|RH|Direction|Développement
 - confidence_score: 0-100
+- verified: true si nom ET affiliation ${companyName} sont confirmés dans le texte
 
-Réponds en JSON strict: {"contacts": [...]}
-N'inclus QUE les personnes qui travaillent probablement chez ${companyName}. Maximum 5 contacts.`;
+Réponds en JSON strict: {"contacts": [...]}`;
 
-  return await callGemini(prompt);
+  const result = await callGemini(prompt);
+  return result?.contacts || [];
 }
 
 // ── Scoring interne ───────────────────────────────────────────────────────────
@@ -256,12 +294,13 @@ const EVENT_ROLES    = /marketing|communication|événement|event|expérience|br
 function scoreContact(contact, hasTeamPage) {
   let score = contact.confidence_score || 0;
   const title = (contact.title || "").toLowerCase();
-  if (DECISION_ROLES.test(title)) score += 40;
+  if (DECISION_ROLES.test(title)) score += 35;
   if (EVENT_ROLES.test(title)) score += 20;
   if (contact.linkedin_url && contact.linkedin_url.includes("linkedin.com/in/")) score += 20;
-  if (contact.email && contact.email.includes("@")) score += 20;
-  if (/montr[eé]al/i.test(contact.title || "")) score += 10;
-  if (hasTeamPage) score += 10;
+  if (contact.email && contact.email.includes("@")) score += 25;
+  if (contact.verified) score += 15;
+  if (contact.name && contact.name.trim().split(" ").length >= 2) score += 10; // has first + last name
+  if (hasTeamPage) score += 5;
   return Math.min(score, 100);
 }
 
@@ -269,10 +308,16 @@ function scoreContact(contact, hasTeamPage) {
 async function hunterDomainSearch(domain, company) {
   if (!HUNTER_KEY) return { data: { emails: [] } };
   try {
-    const url = `https://api.hunter.io/v2/domain-search?domain=${encodeURIComponent(domain)}&company=${encodeURIComponent(company || "")}&limit=5&api_key=${HUNTER_KEY}`;
+    const url = `https://api.hunter.io/v2/domain-search?domain=${encodeURIComponent(domain)}&company=${encodeURIComponent(company || "")}&limit=10&api_key=${HUNTER_KEY}`;
     const res = await fetchWithTimeout(url, {}, 8000);
     return await res.json();
   } catch (_) { return { data: { emails: [] } }; }
+}
+
+// ── Clean and validate a LinkedIn URL ─────────────────────────────────────────
+function cleanLinkedInUrl(url) {
+  if (!url || !url.includes("linkedin.com/in/")) return "";
+  return url.split("?")[0].replace(/\/$/, "").replace(/\/[a-z]{2}_[A-Z]{2}$/, "");
 }
 
 // ── Save contacts to DB ───────────────────────────────────────────────────────
@@ -281,31 +326,44 @@ async function saveContacts(base44, prospectId, prospect, contacts) {
   const seen = new Set();
 
   for (const c of contacts) {
-    const key = (c.linkedin_url || c.email || c.name || "").toLowerCase();
+    // Build a stable dedup key — for title-only stubs, use title
+    const key = (cleanLinkedInUrl(c.linkedin_url) || c.email || c.name || c.title || "").toLowerCase().trim();
     if (!key || seen.has(key)) continue;
     seen.add(key);
 
-    const filters = c.email ? { prospectId, email: c.email } : c.linkedin_url ? { prospectId, linkedinUrl: c.linkedin_url } : null;
+    // Skip duplicates already in DB
+    const filters = c.email
+      ? { prospectId, email: c.email }
+      : cleanLinkedInUrl(c.linkedin_url)
+        ? { prospectId, linkedinUrl: cleanLinkedInUrl(c.linkedin_url) }
+        : null;
     if (filters) {
       const existing = await base44.entities.Contact.filter(filters).catch(() => []);
       if (existing.length > 0) continue;
     }
 
     try {
-      const parts = (c.name || "").split(" ");
+      const cleanLi = cleanLinkedInUrl(c.linkedin_url);
+      const parts = (c.name || "").trim().split(/\s+/);
+      const hasFullName = parts.length >= 2 && parts[0].length > 1 && parts[1].length > 1;
+
       const record = await base44.entities.Contact.create({
         prospectId,
         ownerUserId:     prospect.ownerUserId,
-        firstName:       parts[0] || "",
-        lastName:        parts.slice(1).join(" ") || "",
-        fullName:        c.name || "",
+        firstName:       hasFullName ? parts[0] : "",
+        lastName:        hasFullName ? parts.slice(1).join(" ") : "",
+        fullName:        hasFullName ? c.name.trim() : "",
         title:           c.title || "",
         email:           c.email || "",
-        emailConfidence: c.email ? (c.confidence_score || 50) : 0,
-        linkedinUrl:     c.linkedin_url || "",
+        emailConfidence: c.email ? Math.max(c.confidence_score || 50, 50) : 0,
+        linkedinUrl:     cleanLi,
         hasEmail:        !!(c.email && c.email.includes("@")),
+        // "verified" = we have a real name confirmed from source text/page
+        // Use source field to distinguish: HUNTER > SERP (real name) > SERP (stub/role-only)
         source:          c.source === "HUNTER" ? "HUNTER" : "SERP",
-        contactPageUrl:  c.source_page || "",
+        contactPageUrl:  c.contact_page_url || "",
+        // Store isStub so UI can label it appropriately
+        isStub:          !hasFullName && !c.email,
       });
       saved.push(record);
     } catch (e) {
@@ -316,7 +374,6 @@ async function saveContacts(base44, prospectId, prospect, contacts) {
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
-// Hard wall: if analyzeProspect takes > 50s it must resolve (not hang the orchestrator)
 const GLOBAL_TIMEOUT_MS = 50000;
 
 Deno.serve(async (req) => {
@@ -363,11 +420,8 @@ Deno.serve(async (req) => {
 
   const logs = [];
   const log = (msg) => { console.log(`[ANALYZE] ${msg}`); logs.push(msg); };
-
   log(`START: ${prospect.companyName} (${prospect.domain})`);
 
-  // Wrap entire analysis in a race against global timeout
-  // If it times out, mark prospect as FAILED_ANALYSIS so orchestrator can continue
   const analysisPromise = runAnalysis(base44, user, prospect, prospectId, logApiUsage, log, logs);
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error(`Timeout after ${GLOBAL_TIMEOUT_MS}ms`)), GLOBAL_TIMEOUT_MS)
@@ -387,18 +441,28 @@ Deno.serve(async (req) => {
 });
 
 async function runAnalysis(base44, user, prospect, prospectId, logApiUsage, log, logs) {
-  // ── PHASE 1: Crawl (smartFetch with Browserless fallback) ───────────────────
-  log("Phase 1: Crawling site with smartFetch...");
-  const { pages, scannedCount } = await crawlSite(prospect.domain);
-  log(`Crawled ${scannedCount} pages, ${pages.length} with content`);
+  // ── PHASE 1: Crawl + LinkedIn search in parallel ────────────────────────────
+  // Run crawl AND LinkedIn search simultaneously — don't wait for crawl to decide on LinkedIn
+  log("Phase 1: Crawling site + LinkedIn search in parallel...");
 
-  const hasTeamPage = pages.some(p => /team|equipe|leadership|management|notre-equipe/.test(p.url));
+  const [crawlResult, linkedInRaw] = await Promise.all([
+    crawlSite(prospect.domain),
+    linkedInSearch(prospect.companyName, prospect.domain),
+  ]);
+
+  const { pages, scannedCount } = crawlResult;
+  log(`Crawled ${scannedCount} paths, ${pages.length} with content`);
+  log(`LinkedIn search: ${linkedInRaw.length} candidates`);
+
+  const hasTeamPage = pages.some(p => /team|equipe|leadership|management|notre-equipe|direction|gouvernance/.test(p.url));
+
+  // Build crawled text — annotate each page with its URL for context
   const crawledText = pages.map(p => `--- PAGE: ${p.url} (${p.source}) ---\n${p.text}`).join("\n\n");
 
   // ── PHASE 2: Parallel extraction ────────────────────────────────────────────
-  log("Phase 2: Parallel extraction (Gemini + Hunter + OpenAI analysis)...");
+  log("Phase 2: Parallel extraction (Gemini website + Hunter + OpenAI analysis)...");
 
-  const [geminiContacts, hunterResult, analysis] = await Promise.all([
+  const [geminiResult, hunterResult, analysis] = await Promise.all([
     crawledText.length > 500
       ? extractContactsGemini(prospect.companyName, prospect.domain, crawledText)
       : Promise.resolve({ contacts: [] }),
@@ -440,13 +504,13 @@ Réponds en JSON:
     ]),
   ]);
 
-  // Log API usage
   logApiUsage("OpenAI_Short", "SUCCESS");
-  if (geminiContacts?.contacts?.length > 0) logApiUsage("Gemini", "SUCCESS");
+  if (geminiResult?.contacts?.length > 0) logApiUsage("Gemini", "SUCCESS");
+  if (linkedInRaw.length > 0) logApiUsage("Gemini", "SUCCESS");
 
-  // Process Hunter contacts
+  // Process Hunter contacts — raise confidence threshold to 50 for trustworthiness
   const hunterContacts = (hunterResult?.data?.emails || [])
-    .filter(e => e.confidence >= 40)
+    .filter(e => e.confidence >= 50)
     .slice(0, 5)
     .map(e => ({
       name: `${e.first_name || ""} ${e.last_name || ""}`.trim(),
@@ -456,33 +520,42 @@ Réponds en JSON:
       confidence_score: e.confidence,
       role_category: "unknown",
       source: "HUNTER",
+      verified: !!(e.first_name && e.last_name),
     }));
 
-  logApiUsage("Hunter.io", hunterContacts.length > 0 ? "SUCCESS" : "FAILED", { unitsUsed: hunterContacts.length || 1 });
+  logApiUsage("Hunter.io", hunterContacts.length > 0 ? "SUCCESS" : "FAILED", { unitsUsed: Math.max(hunterContacts.length, 1) });
+  log(`Hunter: ${hunterContacts.length} contacts (≥50% confidence)`);
 
-  log(`Hunter: ${hunterContacts.length} contacts`);
-  log(`Gemini website: ${geminiContacts?.contacts?.length || 0} contacts`);
+  // Website Gemini contacts — attach the specific page URL where each was found
+  // The Gemini prompt returns contacts without page attribution, so we map to the most relevant page
+  const geminiWebsiteContacts = (geminiResult?.contacts || []).map(c => {
+    // Find the best source page: prefer team/contact/leadership pages
+    const teamPage = pages.find(p => /team|equipe|leadership|direction|management|gouvernance/.test(p.url));
+    const contactPage = pages.find(p => /contact|nous-joindre/.test(p.url));
+    const sourcePage = teamPage || contactPage || pages[0];
+    return {
+      ...c,
+      source: "website_gemini",
+      contact_page_url: sourcePage?.url || "",
+    };
+  });
+  log(`Gemini website: ${geminiWebsiteContacts.length} contacts`);
+  log(`LinkedIn search: ${linkedInRaw.length} contacts parsed`);
 
-  // ── PHASE 3: Fallback LinkedIn search if no contacts ────────────────────────
-  let linkedinContacts = [];
-  const websiteContactCount = (geminiContacts?.contacts?.length || 0) + hunterContacts.length;
+  // LinkedIn contacts — already parsed by Gemini above
+  const linkedInContacts = linkedInRaw.map(c => ({
+    ...c,
+    source: "linkedin_search",
+    linkedin_url: cleanLinkedInUrl(c.linkedin_url),
+  }));
 
-  if (websiteContactCount === 0) {
-    log("Phase 3: No contacts found — launching LinkedIn fallback...");
-    const liResult = await geminiLinkedInSearch(prospect.companyName, prospect.domain);
-    linkedinContacts = (liResult?.contacts || []).map(c => ({ ...c, source: "linkedin_search" }));
-    log(`LinkedIn fallback: ${linkedinContacts.length} contacts`);
-  } else {
-    log("Phase 3: Skipped — contacts already found");
-  }
-
-  // ── PHASE 4: Merge, score, deduplicate ──────────────────────────────────────
-  log("Phase 4: Scoring and merging...");
+  // ── PHASE 3: Merge, score, deduplicate ──────────────────────────────────────
+  log("Phase 3: Scoring and merging all sources...");
 
   const allContacts = [
-    ...hunterContacts,
-    ...(geminiContacts?.contacts || []).map(c => ({ ...c, source: "website_gemini", source_page: pages[0]?.url || "" })),
-    ...linkedinContacts,
+    ...hunterContacts,           // highest trust — have real emails
+    ...geminiWebsiteContacts,    // crawled from company site
+    ...linkedInContacts,         // LinkedIn SERP results
   ];
 
   for (const c of allContacts) {
@@ -490,34 +563,47 @@ Réponds en JSON:
   }
 
   allContacts.sort((a, b) => (b.contact_confidence_score || 0) - (a.contact_confidence_score || 0));
-  const topContacts = allContacts.slice(0, 5);
-  log(`Final contacts: ${topContacts.length} (from ${allContacts.length} total)`);
 
-  // ── PHASE 5: Save ──────────────────────────────────────────────────────────
-  log("Phase 5: Saving...");
+  // Take top 5 real contacts, plus up to 2 title-only stubs if we still have < 2 real ones
+  const realContacts = allContacts.filter(c => c.name && c.name.trim().split(/\s+/).length >= 2);
+  const stubContacts = allContacts.filter(c => !c.name || c.name.trim().split(/\s+/).length < 2);
+
+  let topContacts = realContacts.slice(0, 5);
+  // If fewer than 2 real contacts found, append up to 2 stubs so we don't return nothing
+  if (topContacts.length < 2) {
+    topContacts = [...topContacts, ...stubContacts.slice(0, 2 - topContacts.length)];
+  }
+  log(`Final: ${topContacts.length} contacts (${realContacts.length} with full name, ${stubContacts.length} role-only)`);
+
+  // ── PHASE 4: Save ──────────────────────────────────────────────────────────
+  log("Phase 4: Saving contacts...");
   const savedContacts = await saveContacts(base44, prospectId, prospect, topContacts);
 
+  // If still nothing — create title-only stubs from AI analysis, clearly marked
   if (savedContacts.length === 0 && analysis.decisionMakerTitles?.length > 0) {
-    log("Creating stub contacts from AI-suggested titles...");
-    // Use a verified contact page URL from the crawl, or leave empty (no fabricated URLs)
+    log("No contacts saved — creating role-only stubs from AI titles...");
     const verifiedContactPage = pages.find(p => /contact|nous-joindre/.test(p.url))?.url || "";
     for (const title of analysis.decisionMakerTitles.slice(0, 2)) {
       try {
         await base44.entities.Contact.create({
           prospectId,
-          ownerUserId: prospect.ownerUserId,
+          ownerUserId:   prospect.ownerUserId,
+          fullName:      "",
+          firstName:     "",
+          lastName:      "",
           title,
-          hasEmail: false,
+          hasEmail:      false,
           contactPageUrl: verifiedContactPage,
-          source: "SERP",
+          source:        "SERP",
+          isStub:        true,
         });
         savedContacts.push({ title, stub: true });
       } catch (_) {}
     }
   }
 
-  // Update prospect
-  const bestContact = topContacts[0];
+  // ── Update prospect ────────────────────────────────────────────────────────
+  const bestContact = topContacts.find(c => c.name && c.name.trim().split(/\s+/).length >= 2) || topContacts[0];
   await base44.entities.Prospect.update(prospectId, {
     status:              "ANALYSÉ",
     relevanceScore:      analysis.relevanceScore,
@@ -535,8 +621,10 @@ Réponds en JSON:
       hasTeamPage,
       contactSources: {
         hunter: hunterContacts.length,
-        geminiWebsite: geminiContacts?.contacts?.length || 0,
-        linkedinFallback: linkedinContacts.length,
+        geminiWebsite: geminiWebsiteContacts.length,
+        linkedInSearch: linkedInContacts.length,
+        realContacts: realContacts.length,
+        stubContacts: stubContacts.length,
       },
       bestContact: bestContact ? {
         name: bestContact.name,
@@ -545,6 +633,7 @@ Réponds en JSON:
         email: bestContact.email,
         score: bestContact.contact_confidence_score,
         source: bestContact.source,
+        verified: bestContact.verified,
       } : null,
     },
     contactPageUrl: pages.find(p => /contact|nous-joindre/.test(p.url))?.url || prospect.contactPageUrl || "",
@@ -552,7 +641,6 @@ Réponds en JSON:
     analysisErrorAt: null,
   });
 
-  // Activity log
   await base44.entities.ActivityLog.create({
     ownerUserId: user.email,
     actionType: "ANALYZE_PROSPECT",
@@ -564,12 +652,13 @@ Réponds en JSON:
       pagesScanned: scannedCount,
       contactsFound: topContacts.length,
       contactsSaved: savedContacts.length,
-      sources: { hunter: hunterContacts.length, gemini: geminiContacts?.contacts?.length || 0, linkedin: linkedinContacts.length },
+      realContactsFound: realContacts.length,
+      sources: { hunter: hunterContacts.length, geminiWebsite: geminiWebsiteContacts.length, linkedIn: linkedInContacts.length },
     },
     status: "SUCCESS",
-  });
+  }).catch(() => {});
 
-  log(`DONE: score=${analysis.relevanceScore}, contacts=${savedContacts.length}`);
+  log(`DONE: score=${analysis.relevanceScore}, contacts=${savedContacts.length} (${realContacts.length} with name)`);
 
   return Response.json({
     success: true,
@@ -577,8 +666,9 @@ Réponds en JSON:
     contacts: {
       total: savedContacts.length,
       hunter: hunterContacts.length,
-      geminiWebsite: geminiContacts?.contacts?.length || 0,
-      linkedinFallback: linkedinContacts.length,
+      geminiWebsite: geminiWebsiteContacts.length,
+      linkedIn: linkedInContacts.length,
+      withFullName: realContacts.length,
     },
     crawl: { pagesScanned: scannedCount, pagesWithContent: pages.length, hasTeamPage },
     logs,
