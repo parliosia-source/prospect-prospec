@@ -108,6 +108,15 @@ export default function ProspectDetail() {
   const handleQualify = async (status) => {
     await base44.entities.Prospect.update(prospectId, { status });
     setProspect(p => ({ ...p, status }));
+    const actionType = status === "QUALIFIÉ" ? "PROSPECT_QUALIFIED" : "PROSPECT_REJECTED";
+    await base44.entities.ActivityLog.create({
+      ownerUserId: user?.email,
+      actionType,
+      entityType: "Prospect",
+      entityId: prospectId,
+      payload: { status, companyName: prospect?.companyName },
+      status: "SUCCESS",
+    }).catch(() => {});
   };
 
   const handleExport = async () => {
@@ -142,6 +151,14 @@ export default function ProspectDetail() {
         activeVersion: "GENERATED",
         generatedByAI: true,
       });
+      await base44.entities.ActivityLog.create({
+        ownerUserId: user?.email,
+        actionType: "MESSAGE_GENERATED",
+        entityType: "Prospect",
+        entityId: prospectId,
+        payload: { channel: msgChannel, templateType: msgType },
+        status: "SUCCESS",
+      }).catch(() => {});
       await loadData();
       toast.success("Message généré et enregistré en brouillon");
     }

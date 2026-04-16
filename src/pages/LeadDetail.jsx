@@ -92,6 +92,14 @@ export default function LeadDetail() {
         activeVersion: "GENERATED",
         generatedByAI: true,
       });
+      await base44.entities.ActivityLog.create({
+        ownerUserId: user?.email,
+        actionType: "MESSAGE_GENERATED",
+        entityType: "Lead",
+        entityId: leadId,
+        payload: { channel: msgChannel, templateType: msgType },
+        status: "SUCCESS",
+      }).catch(() => {});
       await loadData();
       toast.success("Message généré et enregistré en brouillon");
     }
@@ -285,7 +293,7 @@ export default function LeadDetail() {
         <h3 className="font-semibold text-sm text-slate-800 mb-4 flex items-center gap-2">
           <Clock className="w-4 h-4 text-slate-400" /> Historique d'activité
         </h3>
-        <ActivityTimeline leadId={leadId} key={messages.length} />
+        <ActivityTimeline leadId={leadId} prospectId={lead?.prospectId} key={messages.length} />
       </div>
 
       {/* Sent messages detail */}
