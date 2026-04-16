@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Copy, Save, RefreshCw, RotateCcw, Sparkles, CheckCircle2, ChevronDown, ChevronUp, Send, FileEdit, AlertCircle
+  Copy, Save, RefreshCw, RotateCcw, Sparkles, CheckCircle2, ChevronDown, ChevronUp, Send, FileEdit, AlertCircle, Pencil
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
@@ -175,10 +175,14 @@ export default function MessageComposer({ message: initialMessage, onUpdated }) 
           Brouillon IA
         </button>
         <button
-          onClick={() => setActiveTab("EDITED")}
+          onClick={() => {
+            if (!editedBody.trim()) setEditedBody(generatedContent);
+            if (!editedSubject.trim() && msg.channel === "EMAIL") setEditedSubject(generatedSubject);
+            setActiveTab("EDITED");
+          }}
           className={`flex-1 px-4 py-2 text-xs font-medium transition-colors ${activeTab === "EDITED" ? "border-b-2 border-purple-500 text-purple-700 bg-purple-50" : "text-slate-500 hover:bg-slate-50"}`}
         >
-          Version finale {hasEdited && "✏️"}
+          ✏️ Modifier / Version finale {hasEdited && "·  modifié"}
         </button>
       </div>
 
@@ -204,7 +208,21 @@ export default function MessageComposer({ message: initialMessage, onUpdated }) 
 
         {/* Body */}
         <div>
-          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Message</div>
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Message</div>
+            {activeTab === "GENERATED" && (
+              <button
+                onClick={() => {
+                  if (!editedBody.trim()) setEditedBody(generatedContent);
+                  if (!editedSubject.trim() && msg.channel === "EMAIL") setEditedSubject(generatedSubject);
+                  setActiveTab("EDITED");
+                }}
+                className="flex items-center gap-1 text-xs text-slate-500 hover:text-blue-600 transition-colors"
+              >
+                <Pencil className="w-3 h-3" /> Modifier
+              </button>
+            )}
+          </div>
           {activeTab === "GENERATED" ? (
             <div className="text-sm text-slate-800 bg-slate-50 rounded-lg px-3 py-2.5 whitespace-pre-wrap leading-relaxed min-h-32">
               {generatedContent || "—"}
@@ -215,6 +233,7 @@ export default function MessageComposer({ message: initialMessage, onUpdated }) 
               onChange={e => setEditedBody(e.target.value)}
               placeholder={generatedContent || "Votre version personnalisée…"}
               className="text-sm min-h-40 resize-y leading-relaxed"
+              autoFocus
             />
           )}
         </div>
