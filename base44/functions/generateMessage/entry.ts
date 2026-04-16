@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
 const OPENAI_KEY = Deno.env.get("OPENAI_API_KEY");
 
@@ -19,7 +19,7 @@ Deno.serve(async (req) => {
 
   const { prospectId, leadId, channel, templateType, contactId } = await req.json();
 
-  // Load data
+  // Load all relevant data in parallel
   const [prospect, contact, templates] = await Promise.all([
     prospectId ? base44.entities.Prospect.filter({ id: prospectId }).then(r => r[0]) : null,
     contactId ? base44.entities.Contact.filter({ id: contactId }).then(r => r[0]) : null,
@@ -35,53 +35,100 @@ Deno.serve(async (req) => {
   const settingsArr = await base44.asServiceRole.entities.AppSettings.filter({ settingsId: "global" }).catch(() => []);
   if (settingsArr[0]?.apiCosts) apiCosts = { ...apiCosts, ...settingsArr[0].apiCosts };
 
-  // Pick template (prefer FR_CA, HOT if segment matches)
+  // Pick best template
   const segment = prospect?.segment || "STANDARD";
   const template = templates.find(t => t.languageVariant === "FR_CA" && t.segment === segment)
     || templates.find(t => t.languageVariant === "FR_CA")
     || templates[0];
 
   const senderName = user.full_name || user.email.split("@")[0];
-  const contactName = [contact?.firstName, contact?.lastName].filter(Boolean).join(" ").trim();
-  const firstName = (contactName && contactName !== "null") ? contactName.split(" ")[0] : (contact?.title ? "" : "Madame/Monsieur");
+
+  // ── Contact context ────────────────────────────────────────────────────────
+  const contactFullName = [contact?.firstName, contact?.lastName].filter(Boolean).join(" ").trim();
+  const hasRealName = contactFullName && contactFullName !== "null" && contactFullName.split(" ").length >= 2;
+  const contactFirstName = hasRealName ? contactFullName.split(" ")[0] : "";
+  const isStubContact = contact?.isStub || (!hasRealName && !contact?.email);
+
+  // Salutation strategy:
+  // - Real name known → use first name
+  // - Stub/role-only → address by role naturally ("Bonjour,") — never "Madame/Monsieur"
+  // - No contact → generic "Bonjour,"
+  const salutation = hasRealName ? contactFirstName : "";
+
+  // ── Prospect context ───────────────────────────────────────────────────────
+  const companyName   = prospect?.companyName || "";
+  const industry      = prospect?.industry || "";
+  const location      = prospect?.location?.city || prospect?.location?.region || "";
+  const eventTypes    = (prospect?.eventTypes || []).join(", ");
+  const opportunities = (prospect?.opportunities || []).map(o => o.detail ? `${o.label}: ${o.detail}` : o.label).join("\n- ");
+  const painPoints    = (prospect?.painPoints || []).map(p => p.label).join(", ");
+  const approach      = prospect?.recommendedApproach || "";
+  const reasons       = (prospect?.relevanceReasons || []).join("; ");
+
+  // ── Template intent (use as tone/structure guide, not verbatim copy) ────────
+  const templateHint = template
+    ? `Structure de référence (inspire-toi du ton et de la longueur, adapte le contenu au contexte réel):
+---
+${template.body.slice(0, 600)}
+---`
+    : "";
+
+  // ── Message type context ────────────────────────────────────────────────────
+  const messageTypeMap = {
+    FIRST_MESSAGE: "Premier contact — l'entreprise ne nous connaît pas encore.",
+    FOLLOW_UP_J7: "Relance après 7 jours sans réponse au premier message. Rester bref, rappeler l'objet, proposer une autre date.",
+    FOLLOW_UP_J14: "Relance finale après 14 jours. Ton plus léger, laisser la porte ouverte."
+  };
+  const messageTypeNote = messageTypeMap[templateType] || "";
 
   const systemPrompt = `Tu es ${senderName}, représentant(e) de SYNC Productions à Montréal.
-SYNC = partenaire audiovisuel pour événements corporatifs (son, éclairage, captation, webdiffusion/hybride).
-Ton = professionnel, concret, FR-CA. Pas de marketing fluff.
-Ne pas dire "j'ai vu que vous…" sans source vérifiable.
-CTA soft: 15 minutes ou question sur calendrier événements.
-Sortie JSON strict: { "subject": string|null, "body": string }`;
+SYNC = partenaire audiovisuel pour événements corporatifs : son, éclairage, captation vidéo, webdiffusion/hybride.
+Clients : entreprises et organisations qui organisent leurs propres événements (congrès, AGA, galas, formations, townhalls).
 
-  const context = `
-Entreprise: ${prospect?.companyName || ""}
-Site: ${prospect?.website || ""}
-Industrie: ${prospect?.industry || ""}
-Localisation: ${JSON.stringify(prospect?.location || {})}
-Score pertinence: ${prospect?.relevanceScore || ""}
-Segment: ${segment}
-Raisons: ${(prospect?.relevanceReasons || []).join("; ")}
-Opportunités: ${(prospect?.opportunities || []).map(o => o.label).join("; ")}
-Approche recommandée: ${prospect?.recommendedApproach || ""}
-Contact: ${firstName || "Responsable"}${contact?.title ? `, ${contact.title}` : ""}${contact?.email ? `, ${contact.email}` : ""}
-Canal: ${channel}
-Type message: ${templateType}
-`;
+RÈGLES ABSOLUES:
+- FR-CA naturel — pas de traduction littérale de l'anglais
+- Jamais d'affirmation non vérifiable ("j'ai vu que vous organisez…" sans source)
+- Jamais de fluff d'ouverture ("j'espère que vous allez bien", "je me permets de vous contacter")
+- CTA soft : proposer 15 minutes ou demander le calendrier événements
+- Si le nom du contact est inconnu, commence directement par l'objet sans salutation personnalisée
+- Sois spécifique au contexte de l'entreprise — utilise les opportunités et types d'événements fournis
+- Longueur : concis mais complet. Maximum 8-10 lignes pour un premier message.
+- Sortie JSON strict : { "subject": string|null, "body": string }`;
 
-  const templateContext = template ? `
-Template de base à personnaliser (adapte au contexte, ne copie pas mot pour mot):
-${template.body}` : "";
+  const userPrompt = `Génère un message de prospection B2B pour SYNC Productions.
+
+TYPE: ${messageTypeNote}
+CANAL: ${channel === "EMAIL" ? "Email (inclure un sujet)" : "LinkedIn (pas de sujet)"}
+
+ENTREPRISE CIBLE:
+- Nom: ${companyName}
+- Industrie: ${industry}${location ? `\n- Ville: ${location}` : ""}${eventTypes ? `\n- Types d'événements probables: ${eventTypes}` : ""}
+
+CONTACT:
+- ${hasRealName ? `Prénom: ${contactFirstName}, Nom complet: ${contactFullName}` : isStubContact ? `Rôle ciblé: ${contact?.title || "Responsable"}` : "Contact inconnu — message générique"}${contact?.title && hasRealName ? `\n- Titre: ${contact.title}` : ""}
+
+ANGLE DE PERSONNALISATION (utilise ces éléments dans le message):
+${opportunities ? `- Opportunités identifiées:\n  - ${opportunities}` : ""}${painPoints ? `\n- Points de friction potentiels: ${painPoints}` : ""}${approach ? `\n- Approche recommandée: ${approach}` : ""}${reasons ? `\n- Pourquoi ce prospect est pertinent: ${reasons}` : ""}
+
+${templateHint}
+
+EXPÉDITEUR: ${senderName}
+${salutation ? `Utilise "${salutation}" comme prénom dans la salutation.` : "Commence sans salutation personnalisée — directement par le sujet du message."}
+
+NE PAS inventer de faits non listés ci-dessus. Si peu d'éléments de personnalisation sont disponibles, reste sobre et factuel sur SYNC.`;
 
   const result = await callOpenAI([
     { role: "system", content: systemPrompt },
-    { role: "user", content: `Génère un message personnalisé pour ce prospect.\n\n${context}\n${templateContext}\n\nNom expéditeur: ${senderName}\nPrénom contact: ${firstName || "Responsable"}` }
+    { role: "user", content: userPrompt }
   ]);
 
-  // Replace template variables
+  // Clean up any leftover template variables
   if (result.body) {
     result.body = result.body
-      .replace(/\{firstName\}/g, firstName)
+      .replace(/\{firstName\}/g, salutation || "")
       .replace(/\{senderName\}/g, senderName)
-      .replace(/\{senderTitle\}/g, "Représentant(e) SYNC Productions");
+      .replace(/\{senderTitle\}/g, "Représentant(e) SYNC Productions")
+      .replace(/Madame\/Monsieur,?\s*/g, "");
   }
 
   // Log OpenAI usage
@@ -97,7 +144,6 @@ ${template.body}` : "";
     status: "SUCCESS",
   }).catch(() => {});
 
-  // Return both legacy fields + new structured fields
   result.generatedBody = result.body;
   result.generatedSubject = result.subject || null;
 
