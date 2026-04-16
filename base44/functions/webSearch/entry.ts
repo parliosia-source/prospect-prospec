@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
 const BRAVE_KEY = Deno.env.get("BRAVE_API_KEY");
 const SERPAPI_KEY = Deno.env.get("SERPAPI_API_KEY");
