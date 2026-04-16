@@ -84,19 +84,24 @@ export default function Assistant() {
   const handleSend = async (text) => {
     if (!text.trim()) return;
     let convId = activeConvId;
-    if (!convId) {
-      const conv = await base44.agents.createConversation({
-        agent_name: "sync_assistant",
-        metadata: { name: text.slice(0, 40) }
-      });
-      convId = conv.id;
-      setActiveConvId(convId);
-      await loadConversations();
+    try {
+      if (!convId) {
+        const conv = await base44.agents.createConversation({
+          agent_name: "sync_assistant",
+          metadata: { name: text.slice(0, 40) }
+        });
+        convId = conv.id;
+        setActiveConvId(convId);
+        await loadConversations();
+      }
+      setIsSending(true);
+      const conv = await base44.agents.getConversation(convId);
+      await base44.agents.addMessage(conv, { role: "user", content: text });
+    } catch (err) {
+      console.error("Assistant send error:", err);
+    } finally {
+      setIsSending(false);
     }
-    setIsSending(true);
-    const conv = await base44.agents.getConversation(convId);
-    await base44.agents.addMessage(conv, { role: "user", content: text });
-    setIsSending(false);
   };
 
   const startRename = (conv) => {
