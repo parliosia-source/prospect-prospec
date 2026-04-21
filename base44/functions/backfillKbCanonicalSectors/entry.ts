@@ -139,18 +139,8 @@ function mapToCanonical(rawSectors) {
       canonical.add(SECTOR_CANONICAL_MAP[normRaw]);
       continue;
     }
-    // Check if a canonical key is an exact word boundary match within the raw label
-    let matched = false;
-    for (const [key, val] of Object.entries(SECTOR_CANONICAL_MAP)) {
-      // Only match if the key is at least 6 chars (avoid short spurious matches like "it", "ai")
-      if (key.length >= 6 && normRaw === key) {
-        canonical.add(val);
-        matched = true;
-        break;
-      }
-    }
-    // Keep raw as-is if no canonical match — do not guess
-    if (!matched) canonical.add(raw);
+    // No canonical match found — do NOT copy raw value into canonicalSectors
+    // Raw values stay in industrySectors / industryLabel / themes
   }
   return [...canonical];
 }
