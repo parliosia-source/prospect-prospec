@@ -1,0 +1,106 @@
+{
+  "name": "Contact",
+  "type": "object",
+  "properties": {
+    "prospectId": {
+      "type": "string"
+    },
+    "ownerUserId": {
+      "type": "string"
+    },
+    "firstName": {
+      "type": "string"
+    },
+    "lastName": {
+      "type": "string"
+    },
+    "fullName": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string"
+    },
+    "emailConfidence": {
+      "type": "number"
+    },
+    "linkedinUrl": {
+      "type": "string"
+    },
+    "contactPageUrl": {
+      "type": "string"
+    },
+    "hasEmail": {
+      "type": "boolean",
+      "default": false
+    },
+    "isStub": {
+      "type": "boolean",
+      "default": false,
+      "description": "Conserv\u00e9 pour compatibilit\u00e9 \u2014 pr\u00e9f\u00e9rer contactTier"
+    },
+    "contactTier": {
+      "type": "string",
+      "enum": [
+        "VERIFIED",
+        "IDENTIFIED",
+        "ROLE_ONLY",
+        "PLACEHOLDER"
+      ],
+      "description": "VERIFIED=email+nom confirm\u00e9, IDENTIFIED=nom+LinkedIn sans email, ROLE_ONLY=titre seul, PLACEHOLDER=aucune info r\u00e9elle"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "HUNTER",
+        "SERP",
+        "MANUAL"
+      ],
+      "default": "HUNTER"
+    }
+  },
+  "required": [],
+  "rls": {
+    "create": {
+      "created_by": "{{user.email}}"
+    },
+    "read": {
+      "$or": [
+        {
+          "data.ownerUserId": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "data.ownerUserId": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "data.ownerUserId": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

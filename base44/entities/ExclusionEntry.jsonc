@@ -1,0 +1,87 @@
+{
+  "name": "ExclusionEntry",
+  "type": "object",
+  "properties": {
+    "domain": {
+      "type": "string",
+      "description": "Domaine \u00e0 exclure (ex: competitor.com)"
+    },
+    "brandFingerprint": {
+      "type": "string",
+      "description": "Empreinte normalis\u00e9e de la marque pour la d\u00e9duplication"
+    },
+    "companyName": {
+      "type": "string",
+      "description": "Nom de l'entreprise \u00e0 exclure"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Raison de l'exclusion"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "COMPETITOR",
+        "PARTNER",
+        "DO_NOT_CONTACT",
+        "NON_TARGET",
+        "OTHER"
+      ],
+      "description": "Cat\u00e9gorie d'exclusion"
+    },
+    "campaignId": {
+      "type": "string",
+      "description": "ID de campagne si exclusion sp\u00e9cifique \u00e0 une campagne (null = globale)"
+    },
+    "exclusionType": {
+      "type": "string",
+      "enum": [
+        "GLOBAL",
+        "CAMPAIGN"
+      ],
+      "default": "GLOBAL",
+      "description": "GLOBAL = toutes campagnes, CAMPAIGN = campagne sp\u00e9cifique"
+    },
+    "createdBy": {
+      "type": "string",
+      "description": "Email de l'utilisateur ayant cr\u00e9\u00e9 l'entr\u00e9e"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Date de cr\u00e9ation"
+    },
+    "isActive": {
+      "type": "boolean",
+      "default": true,
+      "description": "Si false, l'exclusion est d\u00e9sactiv\u00e9e sans \u00eatre supprim\u00e9e"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Notes internes sur cette exclusion"
+    }
+  },
+  "required": [],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

@@ -1,0 +1,200 @@
+{
+  "name": "Campaign",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "ownerUserId": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "DRAFT",
+        "RUNNING",
+        "COMPLETED",
+        "FAILED"
+      ],
+      "default": "DRAFT"
+    },
+    "targetCount": {
+      "type": "number",
+      "default": 50
+    },
+    "industrySectors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "companySize": {
+      "type": "string",
+      "enum": [
+        "SMALL",
+        "MID",
+        "LARGE",
+        "ENTERPRISE"
+      ]
+    },
+    "locationMode": {
+      "type": "string",
+      "enum": [
+        "CITY",
+        "REGION",
+        "COUNTRY"
+      ],
+      "default": "CITY"
+    },
+    "locationQuery": {
+      "type": "string"
+    },
+    "kbOnlyMode": {
+      "type": "boolean",
+      "default": false,
+      "description": "Si true, la recherche utilise uniquement la KB sans recherche web"
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "kbTierFilter": {
+      "type": "string",
+      "enum": [
+        "VERIFIED_ONLY",
+        "PROBABLE_AND_ABOVE",
+        "ALL"
+      ],
+      "default": "ALL",
+      "description": "Niveau minimal de confiance KB requis pour inclure une entit\u00e9 dans la recherche"
+    },
+    "extraExcludedDomains": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Domaines suppl\u00e9mentaires \u00e0 exclure sp\u00e9cifiquement pour cette campagne"
+    },
+    "eventFitMinScore": {
+      "type": "number",
+      "default": 0,
+      "description": "Score minimum de fit \u00e9v\u00e9nementiel SYNC requis (0 = aucun filtre)"
+    },
+    "queryPlan": {
+      "type": "object"
+    },
+    "progressPct": {
+      "type": "number",
+      "default": 0
+    },
+    "toolUsage": {
+      "type": "object"
+    },
+    "lastRunAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "errorMessage": {
+      "type": "string"
+    },
+    "lastRunDebugSummary": {
+      "type": "string",
+      "description": "Admin-only one-liner debug summary of the last run"
+    },
+    "countProspects": {
+      "type": "number",
+      "default": 0
+    },
+    "countAnalyzed": {
+      "type": "number",
+      "default": 0
+    },
+    "countQualified": {
+      "type": "number",
+      "default": 0
+    },
+    "countRejected": {
+      "type": "number",
+      "default": 0
+    },
+    "countExported": {
+      "type": "number",
+      "default": 0
+    },
+    "analysisStatus": {
+      "type": "string",
+      "enum": [
+        "IDLE",
+        "RUNNING",
+        "COMPLETED",
+        "FAILED"
+      ],
+      "default": "IDLE"
+    },
+    "analysisLastHeartbeatAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "analysisProgressPct": {
+      "type": "number",
+      "default": 0
+    },
+    "analysisDoneCount": {
+      "type": "number",
+      "default": 0,
+      "description": "Nombre de prospects trait\u00e9s (analys\u00e9s ou \u00e9chou\u00e9s) dans le batch en cours"
+    },
+    "analysisTargetCount": {
+      "type": "number",
+      "default": 0,
+      "description": "Nombre total de prospects s\u00e9lectionn\u00e9s pour le batch d'analyse en cours"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "rls": {
+    "create": {
+      "created_by": "{{user.email}}"
+    },
+    "read": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

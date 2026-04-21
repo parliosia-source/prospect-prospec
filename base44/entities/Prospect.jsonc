@@ -1,0 +1,189 @@
+{
+  "name": "Prospect",
+  "type": "object",
+  "properties": {
+    "campaignId": {
+      "type": "string"
+    },
+    "ownerUserId": {
+      "type": "string"
+    },
+    "companyName": {
+      "type": "string"
+    },
+    "website": {
+      "type": "string"
+    },
+    "domain": {
+      "type": "string"
+    },
+    "industry": {
+      "type": "string"
+    },
+    "location": {
+      "type": "object"
+    },
+    "entityType": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "NOUVEAU",
+        "ANALYS\u00c9",
+        "QUALIFI\u00c9",
+        "REJET\u00c9",
+        "EXPORT\u00c9",
+        "FAILED_ANALYSIS"
+      ],
+      "default": "NOUVEAU"
+    },
+    "sourceOrigin": {
+      "type": "string",
+      "enum": [
+        "WEB",
+        "KB_TOPUP"
+      ],
+      "default": "WEB",
+      "description": "Provenance du prospect: web search ou KB top-up"
+    },
+    "kbEntityId": {
+      "type": "string",
+      "description": "ID de l'entit\u00e9 KBEntity si sourceOrigin=KB_TOPUP"
+    },
+    "relevanceScore": {
+      "type": "number",
+      "description": "Score global de pertinence (conserv\u00e9 pour compatibilit\u00e9)"
+    },
+    "sectorScore": {
+      "type": "number",
+      "description": "Score de puret\u00e9 sectorielle (0-100) \u2014 s\u00e9par\u00e9 du fit \u00e9v\u00e9nementiel"
+    },
+    "eventFitScore": {
+      "type": "number",
+      "description": "Score de fit \u00e9v\u00e9nementiel SYNC (0-100) \u2014 probabilit\u00e9 d'organiser des \u00e9v\u00e9nements corporatifs"
+    },
+    "kbTier": {
+      "type": "string",
+      "enum": [
+        "VERIFIED",
+        "PROBABLE",
+        "UNVERIFIED",
+        "EXCLUDED",
+        "WEB"
+      ],
+      "description": "Niveau de confiance de la source KB pour ce prospect"
+    },
+    "contactQuality": {
+      "type": "string",
+      "enum": [
+        "STRONG",
+        "PARTIAL",
+        "STUB_ONLY",
+        "NONE"
+      ],
+      "description": "Qualit\u00e9 globale des contacts identifi\u00e9s pour ce prospect"
+    },
+    "relevanceReasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "opportunities": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "painPoints": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "serpSnippet": {
+      "type": "string"
+    },
+    "sourceUrl": {
+      "type": "string"
+    },
+    "leadId": {
+      "type": "string"
+    },
+    "analysisRaw": {
+      "type": "object"
+    },
+    "contactPageUrl": {
+      "type": "string"
+    },
+    "segment": {
+      "type": "string",
+      "enum": [
+        "HOT",
+        "STANDARD"
+      ]
+    },
+    "eventTypes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommendedApproach": {
+      "type": "string"
+    },
+    "analysisError": {
+      "type": "string"
+    },
+    "analysisErrorAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "companyName",
+    "website"
+  ],
+  "rls": {
+    "create": {
+      "created_by": "{{user.email}}"
+    },
+    "read": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

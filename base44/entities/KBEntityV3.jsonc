@@ -1,0 +1,211 @@
+{
+  "name": "KBEntityV3",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "normalizedName": {
+      "type": "string"
+    },
+    "domain": {
+      "type": "string",
+      "description": "Domaine unique sans www (cl\u00e9 de d\u00e9dup)"
+    },
+    "website": {
+      "type": "string"
+    },
+    "hqCity": {
+      "type": "string"
+    },
+    "hqProvince": {
+      "type": "string"
+    },
+    "hqCountry": {
+      "type": "string",
+      "default": "CA"
+    },
+    "hqRegion": {
+      "type": "string",
+      "enum": [
+        "MTL",
+        "QC_OTHER",
+        "OUTSIDE_QC",
+        "UNKNOWN"
+      ],
+      "default": "UNKNOWN"
+    },
+    "geoScope": {
+      "type": "string",
+      "enum": [
+        "MTL_CMM",
+        "QC_OTHER",
+        "CANADA_OTHER",
+        "UNKNOWN"
+      ],
+      "default": "UNKNOWN"
+    },
+    "industryLabel": {
+      "type": "string"
+    },
+    "primaryTheme": {
+      "type": "string"
+    },
+    "industrySectors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Secteurs canoniques (union de industryLabel + secteurs d\u00e9riv\u00e9s)"
+    },
+    "industrySectorsDerivedReasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Raisons de d\u00e9rivation pour debug"
+    },
+    "canonicalSectors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Secteurs normalis\u00e9s canoniques \u2014 mapp\u00e9s depuis industrySectors via table de r\u00e9f\u00e9rence"
+    },
+    "themes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "themeConfidence": {
+      "type": "number",
+      "default": 0.7
+    },
+    "entityType": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "notes": {
+      "type": "string"
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "synonyms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "sectorSynonymsUsed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "confidenceScore": {
+      "type": "number",
+      "default": 70
+    },
+    "qualityFlags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "kbTier": {
+      "type": "string",
+      "enum": [
+        "VERIFIED",
+        "PROBABLE",
+        "UNVERIFIED",
+        "EXCLUDED"
+      ],
+      "default": "PROBABLE",
+      "description": "Niveau de confiance de cette entit\u00e9 KB"
+    },
+    "eventFitSignals": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Signaux de fit \u00e9v\u00e9nementiel SYNC extraits de keywords, tags, notes"
+    },
+    "isExcluded": {
+      "type": "boolean",
+      "default": false,
+      "description": "Si true, cette entit\u00e9 est exclue de tous les pipelines de prospection"
+    },
+    "exclusionReason": {
+      "type": "string",
+      "description": "Raison de l'exclusion si isExcluded = true"
+    },
+    "corporateGroupId": {
+      "type": "string",
+      "description": "ID du groupe corporatif parent (nullable, pour usage futur)"
+    },
+    "sourceOrigin": {
+      "type": "string",
+      "enum": [
+        "MIGRATION",
+        "MANUAL",
+        "SEED",
+        "WEB",
+        "IMPORT",
+        "KB"
+      ],
+      "default": "IMPORT"
+    },
+    "sourceUrl": {
+      "type": "string"
+    },
+    "seedBatchId": {
+      "type": "string"
+    },
+    "lastVerifiedAt": {
+      "type": "string",
+      "format": "date"
+    }
+  },
+  "required": [
+    "name",
+    "domain"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {},
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}
