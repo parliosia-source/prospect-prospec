@@ -1,0 +1,63 @@
+{
+  "name": "Hubz404Entry",
+  "type": "object",
+  "properties": {
+    "companyName": {
+      "type": "string"
+    },
+    "domain": {
+      "type": "string"
+    },
+    "website": {
+      "type": "string"
+    },
+    "hqCity": {
+      "type": "string"
+    },
+    "sourceType": {
+      "type": "string",
+      "enum": [
+        "PARTY_WATCH",
+        "SALLE_VIP"
+      ]
+    },
+    "salleReference": {
+      "type": "string"
+    },
+    "eventType": {
+      "type": "string"
+    },
+    "lastEventDate": {
+      "type": "string"
+    },
+    "targetContactMonth": {
+      "type": "string"
+    },
+    "signalSource": {
+      "type": "string"
+    },
+    "signalUrl": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ACTIF",
+        "CONTACT\u00c9",
+        "CONVERTI",
+        "IGNOR\u00c9"
+      ],
+      "default": "ACTIF"
+    },
+    "industryLabel": {
+      "type": "string"
+    },
+    "confidenceScore": {
+      "type": "number"
+    }
+  },
+  "required": []
+}
