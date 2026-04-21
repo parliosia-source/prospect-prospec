@@ -185,6 +185,7 @@ export default function CampaignModal({ open, onClose, onSave }) {
 
             {/* Custom sector with autocomplete */}
             <div className="relative mt-2" ref={suggestionsRef}>
+              <div className="flex gap-2">
               <Input
                 value={form.customSector}
                 onChange={e => {
@@ -192,9 +193,31 @@ export default function CampaignModal({ open, onClose, onSave }) {
                   setShowSuggestions(true);
                 }}
                 onFocus={() => setShowSuggestions(true)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") {
+                    const val = form.customSector.trim();
+                    if (val && !form.industrySectors.includes(val)) {
+                      selectSuggestion(val);
+                    }
+                  }
+                }}
                 placeholder="Secteur libre (ex: agroalimentaire, médias…)"
                 className="text-sm"
               />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const val = form.customSector.trim();
+                  if (val && !form.industrySectors.includes(val)) {
+                    selectSuggestion(val);
+                  }
+                }}
+              >
+                <Plus className="w-4 h-4" />
+              </Button>
+              </div>
               {showSuggestions && filteredSuggestions.length > 0 && (
                 <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
                   {filteredSuggestions.map(s => (
