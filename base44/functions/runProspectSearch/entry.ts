@@ -698,6 +698,15 @@ Deno.serve(async (req) => {
       kbFilterQuery.industrySectors = { $in: requiredSectors };
     }
 
+    // Filter by kbTier if campaign specifies a minimum tier
+    const kbTierFilter = campaign.kbTierFilter || "ALL";
+    if (kbTierFilter === "VERIFIED_ONLY") {
+      kbFilterQuery.kbTier = "VERIFIED";
+    } else if (kbTierFilter === "PROBABLE_AND_ABOVE") {
+      kbFilterQuery.kbTier = { $in: ["VERIFIED", "PROBABLE"] };
+    }
+    // "ALL" → no filter applied
+
     let kbAll = [];
     let page = 0;
     while (Date.now() - START < MAX_MS * 0.7) {
@@ -799,7 +808,7 @@ Deno.serve(async (req) => {
       score += tcNorm * 100;
 
       // ── Event signals: core ICP signal for SYNC — heavily weighted ────────
-      const eventSigs = parseArr(e.eventSignals);
+      const eventSigs = parseArr(e.eventFitSignals);
       if (eventSigs.length >= 3) score += 800;       // strong: org clearly runs events
       else if (eventSigs.length >= 1) score += 400;  // moderate: some event signal
 
