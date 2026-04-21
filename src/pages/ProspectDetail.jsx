@@ -8,6 +8,7 @@ import {
   User, ExternalLink, RefreshCw, ChevronRight, Lightbulb, AlertCircle, Target, Plus
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import StatusBadge from "@/components/shared/StatusBadge";
 import MessageComposer from "@/components/messages/MessageComposer";
@@ -223,6 +224,24 @@ export default function ProspectDetail() {
           </div>
 
           <div className="flex flex-col gap-2 flex-shrink-0">
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50 text-xs">Supprimer</Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Supprimer ce prospect ?</AlertDialogTitle>
+                  <AlertDialogDescription>Cette action est irréversible.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Annuler</AlertDialogCancel>
+                  <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={async () => {
+                    await base44.entities.Prospect.delete(prospectId);
+                    window.location.href = createPageUrl("Campaigns");
+                  }}>Supprimer</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             {prospect.status === "ANALYSÉ" && (
               <>
                 <Button size="sm" onClick={() => handleQualify("QUALIFIÉ")} className="bg-green-600 hover:bg-green-700 gap-1.5">

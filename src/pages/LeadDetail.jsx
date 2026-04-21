@@ -13,6 +13,7 @@ import { fr } from "date-fns/locale";
 import StatusBadge from "@/components/shared/StatusBadge";
 import MessageComposer from "@/components/messages/MessageComposer";
 import { toast } from "sonner";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 function safeFullName(c) {
   const name = [c.firstName, c.lastName].filter(Boolean).join(" ").trim();
@@ -191,17 +192,37 @@ export default function LeadDetail() {
               <span className="flex items-center gap-1"><MessageSquare className="w-3.5 h-3.5" />{lead.messageCount || 0} message(s)</span>
             </div>
           </div>
-          <Select value={lead.status} onValueChange={handleUpdateStatus}>
-            <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="NEW">Nouveau</SelectItem>
-              <SelectItem value="CONTACTED">Contacté</SelectItem>
-              <SelectItem value="REPLIED">A répondu</SelectItem>
-              <SelectItem value="MEETING">Meeting</SelectItem>
-              <SelectItem value="CLOSED_WON">Gagné</SelectItem>
-              <SelectItem value="CLOSED_LOST">Perdu</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-2">
+            <Select value={lead.status} onValueChange={handleUpdateStatus}>
+              <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="NEW">Nouveau</SelectItem>
+                <SelectItem value="CONTACTED">Contacté</SelectItem>
+                <SelectItem value="REPLIED">A répondu</SelectItem>
+                <SelectItem value="MEETING">Meeting</SelectItem>
+                <SelectItem value="CLOSED_WON">Gagné</SelectItem>
+                <SelectItem value="CLOSED_LOST">Perdu</SelectItem>
+              </SelectContent>
+            </Select>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button size="sm" variant="destructive" className="h-8 text-xs">Supprimer ce lead</Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Supprimer ce lead ?</AlertDialogTitle>
+                  <AlertDialogDescription>Cette action est irréversible.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Annuler</AlertDialogCancel>
+                  <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={async () => {
+                    await base44.entities.Lead.delete(leadId);
+                    window.location.href = createPageUrl("Pipeline");
+                  }}>Supprimer</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
         </div>
 
         {/* Next action */}
