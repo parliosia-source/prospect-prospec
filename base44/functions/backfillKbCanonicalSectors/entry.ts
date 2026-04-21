@@ -1,9 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
-// ── Canonical sector mapping table ────────────────────────────────────────────
-// Maps any raw sector variant → canonical sector name
 const SECTOR_CANONICAL_MAP = {
-  // Finance
   "finance": "Finance & Assurance",
   "finance & assurance": "Finance & Assurance",
   "assurance": "Finance & Assurance",
@@ -14,86 +11,58 @@ const SECTOR_CANONICAL_MAP = {
   "financial services": "Finance & Assurance",
   "insurance": "Finance & Assurance",
   "banking": "Finance & Assurance",
-
-  // Immobilier
   "immobilier": "Immobilier",
   "real estate": "Immobilier",
   "construction": "Immobilier",
   "promoteur immobilier": "Immobilier",
-  "gestion immobilière": "Immobilier",
-
-  // Droit & Comptabilité
+  "gestion immobiliere": "Immobilier",
   "droit": "Droit & Comptabilité",
-  "droit & comptabilité": "Droit & Comptabilité",
-  "comptabilité": "Droit & Comptabilité",
+  "droit & comptabilite": "Droit & Comptabilité",
+  "comptabilite": "Droit & Comptabilité",
   "juridique": "Droit & Comptabilité",
   "law": "Droit & Comptabilité",
   "legal": "Droit & Comptabilité",
   "accounting": "Droit & Comptabilité",
   "notaire": "Droit & Comptabilité",
-
-  // Transport & Logistique
   "transport": "Transport & Logistique",
   "transport & logistique": "Transport & Logistique",
   "logistique": "Transport & Logistique",
   "logistics": "Transport & Logistique",
   "supply chain": "Transport & Logistique",
   "distribution": "Transport & Logistique",
-
-  // Technologie
   "technologie": "Technologie",
   "technology": "Technologie",
-  "tech": "Technologie",
   "informatique": "Technologie",
   "saas": "Technologie",
   "logiciel": "Technologie",
   "software": "Technologie",
-  "numérique": "Technologie",
+  "numerique": "Technologie",
   "digital": "Technologie",
-  "it": "Technologie",
   "intelligence artificielle": "Technologie",
-  "ai": "Technologie",
-  "cybersécurité": "Technologie",
-
-  // Santé & Pharma
-  "santé": "Santé & Pharma",
-  "santé & pharma": "Santé & Pharma",
+  "cybersecurite": "Technologie",
+  "sante": "Santé & Pharma",
+  "sante & pharma": "Santé & Pharma",
   "health": "Santé & Pharma",
   "pharma": "Santé & Pharma",
   "pharmaceutique": "Santé & Pharma",
-  "médical": "Santé & Pharma",
   "medical": "Santé & Pharma",
   "biotech": "Santé & Pharma",
   "biotechnologie": "Santé & Pharma",
-  "clinique": "Santé & Pharma",
-  "hospital": "Santé & Pharma",
-  "hôpital": "Santé & Pharma",
-
-  // Gouvernement & Public
+  "hopital": "Santé & Pharma",
   "gouvernement": "Gouvernement & Public",
   "gouvernement & public": "Gouvernement & Public",
   "government": "Gouvernement & Public",
-  "public": "Gouvernement & Public",
   "municipal": "Gouvernement & Public",
-  "municipalité": "Gouvernement & Public",
-  "ministère": "Gouvernement & Public",
-  "fédéral": "Gouvernement & Public",
-  "provincial": "Gouvernement & Public",
-
-  // Éducation & Formation
-  "éducation": "Éducation & Formation",
-  "éducation & formation": "Éducation & Formation",
+  "municipalite": "Gouvernement & Public",
+  "ministere": "Gouvernement & Public",
   "education": "Éducation & Formation",
+  "education & formation": "Éducation & Formation",
   "formation": "Éducation & Formation",
   "enseignement": "Éducation & Formation",
-  "université": "Éducation & Formation",
+  "universite": "Éducation & Formation",
   "university": "Éducation & Formation",
-  "collège": "Éducation & Formation",
-  "cégep": "Éducation & Formation",
-  "school": "Éducation & Formation",
-  "académique": "Éducation & Formation",
-
-  // Associations & OBNL
+  "college": "Éducation & Formation",
+  "cegep": "Éducation & Formation",
   "association": "Associations & OBNL",
   "associations & obnl": "Associations & OBNL",
   "obnl": "Associations & OBNL",
@@ -103,9 +72,7 @@ const SECTOR_CANONICAL_MAP = {
   "syndicat": "Associations & OBNL",
   "chambre de commerce": "Associations & OBNL",
   "ordre professionnel": "Associations & OBNL",
-  "fédération": "Associations & OBNL",
-
-  // Industrie & Manufacture
+  "federation": "Associations & OBNL",
   "industrie": "Industrie & Manufacture",
   "industrie & manufacture": "Industrie & Manufacture",
   "manufacture": "Industrie & Manufacture",
@@ -113,15 +80,10 @@ const SECTOR_CANONICAL_MAP = {
   "manufacturing": "Industrie & Manufacture",
   "agroalimentaire": "Industrie & Manufacture",
   "chimie": "Industrie & Manufacture",
-  "engineering": "Industrie & Manufacture",
-  "ingénierie": "Industrie & Manufacture",
-
-  // Commerce de détail
-  "commerce de détail": "Commerce de détail",
+  "commerce de detail": "Commerce de détail",
   "retail": "Commerce de détail",
   "commerce": "Commerce de détail",
   "detaillant": "Commerce de détail",
-  "détaillant": "Commerce de détail",
   "e-commerce": "Commerce de détail",
 };
 
@@ -134,15 +96,30 @@ function mapToCanonical(rawSectors) {
   const canonical = new Set();
   for (const raw of rawSectors) {
     const normRaw = normKey(raw);
-    // Direct match only — no partial match to avoid false positives
     if (SECTOR_CANONICAL_MAP[normRaw]) {
       canonical.add(SECTOR_CANONICAL_MAP[normRaw]);
-      continue;
     }
-    // No canonical match found — do NOT copy raw value into canonicalSectors
-    // Raw values stay in industrySectors / industryLabel / themes
+    // No fallback — raw values that don't match stay in industrySectors/themes
   }
   return [...canonical];
+}
+
+async function writeWithRetry(base44, id, data, label) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      await base44.asServiceRole.entities.KBEntityV3.update(id, data);
+      return true;
+    } catch (e) {
+      const isRL = e.status === 429 || (e.message || "").includes("Rate limit");
+      if (isRL && attempt < 5) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 2000 + 500));
+      } else {
+        console.error(`[${label}] Failed ${id}: ${e.message}`);
+        return false;
+      }
+    }
+  }
+  return false;
 }
 
 Deno.serve(async (req) => {
@@ -153,60 +130,48 @@ Deno.serve(async (req) => {
 
   const body = await req.json().catch(() => ({}));
   const dryRun = body.dryRun === true;
-  const limit = body.limit || 0;
+  const offset = body.offset || 0;
+  const chunkSize = body.chunkSize || 400;
 
-  let page = 0;
-  let total = 0, updated = 0, skipped = 0, failed = 0;
+  let updated = 0, skipped = 0, failed = 0;
   const samples = [];
 
-  while (true) {
-    const batch = await base44.asServiceRole.entities.KBEntityV3
-      .filter({}, "-created_date", 500, page * 500)
-      .catch(() => []);
-    if (!batch || batch.length === 0) break;
+  const batch = await base44.asServiceRole.entities.KBEntityV3
+    .filter({}, "-created_date", chunkSize, offset)
+    .catch(() => []);
 
-    for (const kb of batch) {
-      if (limit > 0 && total >= limit) break;
-      total++;
-
-      // Skip if canonicalSectors already populated
-      if (Array.isArray(kb.canonicalSectors) && kb.canonicalSectors.length > 0) {
-        skipped++;
-        continue;
-      }
-
-      // Build source sectors from all available fields
-      const sourceSectors = [
-        ...(Array.isArray(kb.industrySectors) ? kb.industrySectors : []),
-        ...(Array.isArray(kb.themes) ? kb.themes : []),
-        kb.industryLabel,
-        kb.primaryTheme,
-      ].filter(Boolean);
-
-      const canonical = mapToCanonical(sourceSectors);
-
-      if (samples.length < 10) {
-        samples.push({ id: kb.id, name: kb.name, sourceSectors, canonicalSectors: canonical });
-      }
-
-      if (!dryRun) {
-        try {
-          await base44.asServiceRole.entities.KBEntityV3.update(kb.id, { canonicalSectors: canonical });
-          updated++;
-        } catch (e) {
-          console.error(`[backfillKbCanonicalSectors] Failed ${kb.id}: ${e.message}`);
-          failed++;
-        }
-      } else {
-        updated++;
-      }
+  for (const kb of batch) {
+    if (Array.isArray(kb.canonicalSectors) && kb.canonicalSectors.length > 0) {
+      skipped++;
+      continue;
     }
 
-    if (batch.length < 500) break;
-    if (limit > 0 && total >= limit) break;
-    page++;
-    if (page >= 40) break;
+    const sourceSectors = [
+      ...(Array.isArray(kb.industrySectors) ? kb.industrySectors : []),
+      ...(Array.isArray(kb.themes) ? kb.themes : []),
+      kb.industryLabel,
+      kb.primaryTheme,
+    ].filter(Boolean);
+
+    const canonical = mapToCanonical(sourceSectors);
+
+    if (samples.length < 5) {
+      samples.push({ name: kb.name, sourceSectors: sourceSectors.slice(0, 3), canonicalSectors: canonical });
+    }
+
+    if (!dryRun) {
+      const ok = await writeWithRetry(base44, kb.id, { canonicalSectors: canonical }, "backfillKbCanonicalSectors");
+      if (ok) updated++; else failed++;
+      await new Promise(r => setTimeout(r, 350));
+    } else {
+      updated++;
+    }
   }
 
-  return Response.json({ success: true, dryRun, total, updated, skipped, failed, samples });
+  return Response.json({
+    success: true, dryRun, offset, chunkSize,
+    recordsInChunk: batch.length, updated, skipped, failed, samples,
+    nextOffset: batch.length === chunkSize ? offset + chunkSize : null,
+    done: batch.length < chunkSize,
+  });
 });

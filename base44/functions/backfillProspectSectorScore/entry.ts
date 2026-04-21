@@ -1,7 +1,22 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
-// Simple backfill: sectorScore = relevanceScore for existing prospects
-// This initializes the new field without modifying relevanceScore
+async function writeWithRetry(base44, id, data, label) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      await base44.asServiceRole.entities.Prospect.update(id, data);
+      return true;
+    } catch (e) {
+      const isRL = e.status === 429 || (e.message || "").includes("Rate limit");
+      if (isRL && attempt < 5) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 2000 + 500));
+      } else {
+        console.error(`[${label}] Failed ${id}: ${e.message}`);
+        return false;
+      }
+    }
+  }
+  return false;
+}
 
 Deno.serve(async (req) => {
   const base44 = createClientFromRequest(req);
@@ -11,56 +26,35 @@ Deno.serve(async (req) => {
 
   const body = await req.json().catch(() => ({}));
   const dryRun = body.dryRun === true;
-  const limit = body.limit || 0;
+  const offset = body.offset || 0;
+  const chunkSize = body.chunkSize || 400;
 
-  let page = 0;
-  let total = 0, updated = 0, skipped = 0, failed = 0;
+  let updated = 0, skipped = 0, failed = 0;
   const samples = [];
 
-  while (true) {
-    const batch = await base44.asServiceRole.entities.Prospect
-      .filter({}, "-created_date", 500, page * 500)
-      .catch(() => []);
-    if (!batch || batch.length === 0) break;
+  const batch = await base44.asServiceRole.entities.Prospect
+    .filter({}, "-created_date", chunkSize, offset)
+    .catch(() => []);
 
-    for (const p of batch) {
-      if (limit > 0 && total >= limit) break;
-      total++;
+  for (const p of batch) {
+    if (typeof p.sectorScore === "number") { skipped++; continue; }
+    if (typeof p.relevanceScore !== "number") { skipped++; continue; }
 
-      // Skip if sectorScore already set
-      if (typeof p.sectorScore === "number") {
-        skipped++;
-        continue;
-      }
+    if (samples.length < 5) samples.push({ companyName: p.companyName, relevanceScore: p.relevanceScore });
 
-      // Skip if no relevanceScore to copy
-      if (typeof p.relevanceScore !== "number") {
-        skipped++;
-        continue;
-      }
-
-      if (samples.length < 10) {
-        samples.push({ id: p.id, companyName: p.companyName, relevanceScore: p.relevanceScore, sectorScoreToSet: p.relevanceScore });
-      }
-
-      if (!dryRun) {
-        try {
-          await base44.asServiceRole.entities.Prospect.update(p.id, { sectorScore: p.relevanceScore });
-          updated++;
-        } catch (e) {
-          console.error(`[backfillProspectSectorScore] Failed ${p.id}: ${e.message}`);
-          failed++;
-        }
-      } else {
-        updated++;
-      }
+    if (!dryRun) {
+      const ok = await writeWithRetry(base44, p.id, { sectorScore: p.relevanceScore }, "backfillProspectSectorScore");
+      if (ok) updated++; else failed++;
+      await new Promise(r => setTimeout(r, 350));
+    } else {
+      updated++;
     }
-
-    if (batch.length < 500) break;
-    if (limit > 0 && total >= limit) break;
-    page++;
-    if (page >= 40) break;
   }
 
-  return Response.json({ success: true, dryRun, total, updated, skipped, failed, samples });
+  return Response.json({
+    success: true, dryRun, offset, chunkSize,
+    recordsInChunk: batch.length, updated, skipped, failed, samples,
+    nextOffset: batch.length === chunkSize ? offset + chunkSize : null,
+    done: batch.length < chunkSize,
+  });
 });
