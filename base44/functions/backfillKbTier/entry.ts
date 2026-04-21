@@ -1,6 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
-// ── kbTier inference rules ─────────────────────────────────────────────────
 function inferKbTier(kb) {
   if (kb.isExcluded) return "EXCLUDED";
   const score = typeof kb.confidenceScore === "number" ? kb.confidenceScore : (parseFloat(kb.confidenceScore) || 50);
@@ -17,51 +16,47 @@ function inferKbTier(kb) {
   return "PROBABLE";
 }
 
-async function writeWithRetry(base44, id, data, label) {
-  for (let attempt = 0; attempt < 6; attempt++) {
+async function writeWithRetry(base44, id, data) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     try {
       await base44.asServiceRole.entities.KBEntityV3.update(id, data);
-      return true;
+      return { ok: true };
     } catch (e) {
       const isRL = e.status === 429 || (e.message || "").includes("Rate limit");
-      if (isRL && attempt < 5) {
-        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 2000 + 500));
+      if (isRL && attempt < 3) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 3000));
       } else {
-        console.error(`[${label}] Failed ${id}: ${e.message}`);
-        return false;
+        return { ok: false, error: e.message };
       }
     }
   }
-  return false;
+  return { ok: false, error: "Max retries" };
 }
 
 Deno.serve(async (req) => {
   const base44 = createClientFromRequest(req);
   const user = await base44.auth.me();
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-  if (user.role !== "admin") return Response.json({ error: "Forbidden: Admin only" }, { status: 403 });
+  if (user.role !== "admin") return Response.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await req.json().catch(() => ({}));
   const dryRun = body.dryRun === true;
-  // offset = starting record index, chunkSize = how many to process per call
   const offset = body.offset || 0;
-  const chunkSize = body.chunkSize || 400;
+  const chunkSize = body.chunkSize || 50;
 
-  let total = 0, updated = 0, skipped = 0, failed = 0;
-  const tierCounts = { VERIFIED: 0, PROBABLE: 0, UNVERIFIED: 0, EXCLUDED: 0 };
-  const samples = [];
-
-  // Fetch one chunk at the given offset
   const batch = await base44.asServiceRole.entities.KBEntityV3
     .filter({}, "-created_date", chunkSize, offset)
     .catch(() => []);
 
-  total = batch.length;
+  let processedCount = 0, successCount = 0, errorCount = 0, skippedCount = 0;
+  const errorIds = [];
+  const tierCounts = { VERIFIED: 0, PROBABLE: 0, UNVERIFIED: 0, EXCLUDED: 0 };
 
   for (const kb of batch) {
-    // Skip if already set to a non-default value
+    processedCount++;
+
     if (kb.kbTier && kb.kbTier !== "PROBABLE") {
-      skipped++;
+      skippedCount++;
       tierCounts[kb.kbTier] = (tierCounts[kb.kbTier] || 0) + 1;
       continue;
     }
@@ -69,31 +64,23 @@ Deno.serve(async (req) => {
     const newTier = inferKbTier(kb);
     tierCounts[newTier] = (tierCounts[newTier] || 0) + 1;
 
-    if (samples.length < 5) {
-      samples.push({ id: kb.id, name: kb.name, sourceOrigin: kb.sourceOrigin, confidenceScore: kb.confidenceScore, kbTierAfter: newTier });
-    }
-
     if (!dryRun) {
-      const ok = await writeWithRetry(base44, kb.id, { kbTier: newTier }, "backfillKbTier");
-      if (ok) updated++; else failed++;
-      await new Promise(r => setTimeout(r, 350));
+      const res = await writeWithRetry(base44, kb.id, { kbTier: newTier });
+      if (res.ok) successCount++;
+      else { errorCount++; errorIds.push({ id: kb.id, name: kb.name, error: res.error }); }
+      await new Promise(r => setTimeout(r, 600));
     } else {
-      updated++;
+      successCount++;
     }
   }
 
+  const hasMore = batch.length === chunkSize;
+  const nextOffsetSuggested = hasMore ? offset + chunkSize : null;
+
   return Response.json({
-    success: true,
-    dryRun,
-    offset,
-    chunkSize,
-    recordsInChunk: total,
-    updated,
-    skipped,
-    failed,
-    tierCounts,
-    samples,
-    nextOffset: total === chunkSize ? offset + chunkSize : null,
-    done: total < chunkSize,
+    success: true, dryRun, offset, chunkSize,
+    processedCount, successCount, errorCount, skippedCount,
+    tierCounts, errorIds,
+    hasMore, nextOffsetSuggested,
   });
 });

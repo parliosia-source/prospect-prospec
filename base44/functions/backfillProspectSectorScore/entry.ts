@@ -1,60 +1,62 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
-async function writeWithRetry(base44, id, data, label) {
-  for (let attempt = 0; attempt < 6; attempt++) {
+async function writeWithRetry(base44, id, data) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     try {
       await base44.asServiceRole.entities.Prospect.update(id, data);
-      return true;
+      return { ok: true };
     } catch (e) {
       const isRL = e.status === 429 || (e.message || "").includes("Rate limit");
-      if (isRL && attempt < 5) {
-        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 2000 + 500));
+      if (isRL && attempt < 3) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 3000));
       } else {
-        console.error(`[${label}] Failed ${id}: ${e.message}`);
-        return false;
+        return { ok: false, error: e.message };
       }
     }
   }
-  return false;
+  return { ok: false, error: "Max retries" };
 }
 
 Deno.serve(async (req) => {
   const base44 = createClientFromRequest(req);
   const user = await base44.auth.me();
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-  if (user.role !== "admin") return Response.json({ error: "Forbidden: Admin only" }, { status: 403 });
+  if (user.role !== "admin") return Response.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await req.json().catch(() => ({}));
   const dryRun = body.dryRun === true;
   const offset = body.offset || 0;
-  const chunkSize = body.chunkSize || 400;
-
-  let updated = 0, skipped = 0, failed = 0;
-  const samples = [];
+  const chunkSize = body.chunkSize || 50;
 
   const batch = await base44.asServiceRole.entities.Prospect
     .filter({}, "-created_date", chunkSize, offset)
     .catch(() => []);
 
-  for (const p of batch) {
-    if (typeof p.sectorScore === "number") { skipped++; continue; }
-    if (typeof p.relevanceScore !== "number") { skipped++; continue; }
+  let processedCount = 0, successCount = 0, errorCount = 0, skippedCount = 0;
+  const errorIds = [];
 
-    if (samples.length < 5) samples.push({ companyName: p.companyName, relevanceScore: p.relevanceScore });
+  for (const p of batch) {
+    processedCount++;
+
+    if (typeof p.sectorScore === "number") { skippedCount++; continue; }
+    if (typeof p.relevanceScore !== "number") { skippedCount++; continue; }
 
     if (!dryRun) {
-      const ok = await writeWithRetry(base44, p.id, { sectorScore: p.relevanceScore }, "backfillProspectSectorScore");
-      if (ok) updated++; else failed++;
-      await new Promise(r => setTimeout(r, 350));
+      const res = await writeWithRetry(base44, p.id, { sectorScore: p.relevanceScore });
+      if (res.ok) successCount++;
+      else { errorCount++; errorIds.push({ id: p.id, name: p.companyName, error: res.error }); }
+      await new Promise(r => setTimeout(r, 600));
     } else {
-      updated++;
+      successCount++;
     }
   }
 
+  const hasMore = batch.length === chunkSize;
+
   return Response.json({
     success: true, dryRun, offset, chunkSize,
-    recordsInChunk: batch.length, updated, skipped, failed, samples,
-    nextOffset: batch.length === chunkSize ? offset + chunkSize : null,
-    done: batch.length < chunkSize,
+    processedCount, successCount, errorCount, skippedCount,
+    errorIds, hasMore,
+    nextOffsetSuggested: hasMore ? offset + chunkSize : null,
   });
 });
