@@ -4,11 +4,12 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
 import { fr } from "date-fns/locale";
-import { Building2, ChevronRight, AlertTriangle, Clock, LayoutGrid, List, Calendar, MessageSquare, CheckCircle2, PhoneCall } from "lucide-react";
+import { Building2, ChevronRight, AlertTriangle, Clock, LayoutGrid, List, Calendar, MessageSquare, CheckCircle2, PhoneCall, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/shared/StatusBadge";
 import LeadBoard from "@/components/leads/LeadBoard";
 import { toast } from "sonner";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 const VIEWS = ["Aujourd'hui", "Overdue", "Tous", "Board"];
 const ACTION_LABELS = { FOLLOW_UP_J7: "Relance J+7", FOLLOW_UP_J14: "Relance J+14", CALL: "Appel", SEND_MESSAGE: "Message", CUSTOM: "Action" };
@@ -77,6 +78,28 @@ export default function Pipeline() {
     });
 
     toast.success(status === "REPLIED" ? "✓ A répondu — relances arrêtées" : "✓ RDV enregistré — relances arrêtées");
+    loadLeads();
+  };
+
+  const handleRevertStatus = async (lead) => {
+    const revertedStatus = lead.lastContactedAt ? "CONTACTED" : "NEW";
+    const nextActionDueAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const updates = {
+      status: revertedStatus,
+      nextActionStatus: "ACTIVE",
+      nextActionDueAt,
+      nextActionType: "FOLLOW_UP_J7",
+    };
+    await base44.entities.Lead.update(lead.id, updates);
+    await base44.entities.ActivityLog.create({
+      ownerUserId: user?.email,
+      actionType: "LEAD_STATUS_REVERTED",
+      entityType: "Lead",
+      entityId: lead.id,
+      payload: { previousStatus: lead.status, revertedStatus },
+      status: "SUCCESS",
+    });
+    toast.success("↩ Lead remis en prospection active");
     loadLeads();
   };
 
@@ -219,14 +242,35 @@ export default function Pipeline() {
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
                         {lead.status === "CONTACTED" && (
-                          <>
-                            <button onClick={() => handleQuickStatus(lead, "REPLIED")} title="A répondu" className="p-1 rounded hover:bg-green-50 text-slate-400 hover:text-green-600">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button onClick={() => handleQuickStatus(lead, "MEETING")} title="RDV" className="p-1 rounded hover:bg-blue-50 text-slate-400 hover:text-blue-600">
-                              <PhoneCall className="w-3.5 h-3.5" />
-                            </button>
-                          </>
+                           <>
+                             <button onClick={() => handleQuickStatus(lead, "REPLIED")} title="A répondu" className="p-1 rounded hover:bg-green-50 text-slate-400 hover:text-green-600">
+                               <CheckCircle2 className="w-3.5 h-3.5" />
+                             </button>
+                             <button onClick={() => handleQuickStatus(lead, "MEETING")} title="RDV" className="p-1 rounded hover:bg-blue-50 text-slate-400 hover:text-blue-600">
+                               <PhoneCall className="w-3.5 h-3.5" />
+                             </button>
+                           </>
+                         )}
+                        {["REPLIED", "MEETING"].includes(lead.status) && lead.nextActionStatus === "CANCELED" && (
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <button title="Annuler" className="p-1 rounded hover:bg-amber-50 text-slate-400 hover:text-amber-600 flex items-center gap-0.5 text-xs">
+                                <Undo2 className="w-3.5 h-3.5" />
+                              </button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Remettre ce lead en prospection active ?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Le statut sera remis à {lead.lastContactedAt ? "Contacté" : "Nouveau"} et une relance J+7 sera planifiée.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Annuler</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleRevertStatus(lead)}>Confirmer</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         )}
                         <Link to={createPageUrl("LeadDetail") + "?id=" + lead.id} className="p-1.5 text-slate-400 hover:text-blue-500 inline-flex">
                           <ChevronRight className="w-4 h-4" />
