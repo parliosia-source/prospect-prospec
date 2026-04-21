@@ -8,6 +8,7 @@ import { ChevronRight, Clock, AlertTriangle, Star, Building2, Plus } from "lucid
 import { Button } from "@/components/ui/button";
 import GazetteBlock from "@/components/dashboard/GazetteBlock";
 import PipelineHealth from "@/components/dashboard/PipelineHealth";
+import Hubz404Block from "@/components/dashboard/Hubz404Block";
 import CampaignModal from "@/components/campaigns/CampaignModal";
 
 export default function Dashboard() {
@@ -125,6 +126,7 @@ export default function Dashboard() {
         </div>
 
         <div className="space-y-4">
+          <Hubz404Block />
           {topProspects.length > 0 && (
             <div className="bg-white rounded-xl border shadow-sm">
               <div className="px-4 py-3 border-b flex items-center gap-2">
