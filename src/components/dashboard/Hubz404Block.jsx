@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
-import { PartyPopper, Building2, ExternalLink, MapPin, RefreshCw } from "lucide-react";
+import { createPageUrl } from "@/utils";
+import { PartyPopper, Building2, ExternalLink, MapPin, RefreshCw, Brain } from "lucide-react";
 
 const SOURCE_CONFIG = {
   PARTY_WATCH: { label: "Party Watch", color: "bg-pink-50 text-pink-700 border-pink-100" },
@@ -24,10 +25,8 @@ export default function Hubz404Block() {
   const loadItems = async () => {
     setIsLoading(true);
     try {
-      const data = await base44.entities.Hubz404Entry.filter(
-        { status: "ACTIF" }, "targetContactMonth", 50
-      );
-      setItems(data);
+      const data = await base44.entities.Hubz404Entry.list("-targetContactMonth", 50);
+      setItems(data.filter(i => i.status === "ACTIF"));
     } catch (e) { console.error(e); }
     setIsLoading(false);
   };
@@ -35,6 +34,19 @@ export default function Hubz404Block() {
   const handleStatusChange = async (item, newStatus) => {
     await base44.entities.Hubz404Entry.update(item.id, { status: newStatus });
     setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: newStatus } : i));
+  };
+
+  const handleAnalyze = async (item) => {
+    const prospect = await base44.entities.Prospect.create({
+      companyName: item.companyName,
+      domain: item.domain,
+      website: item.website,
+      industry: item.industryLabel,
+      status: "NOUVEAU",
+      sourceTag: "HUBZ404",
+      notes: item.notes,
+    });
+    window.location.href = createPageUrl("ProspectDetail") + "?id=" + prospect.id;
   };
 
   const filtered = filter === "ALL" ? items : items.filter(i => i.sourceType === filter);
@@ -116,6 +128,13 @@ export default function Hubz404Block() {
                       <ExternalLink className="w-3.5 h-3.5" />
                     </a>
                   )}
+                  <button
+                    onClick={() => handleAnalyze(item)}
+                    title="Analyser ce compte"
+                    className="p-1 rounded hover:bg-purple-50 text-slate-300 hover:text-purple-600 transition-colors"
+                  >
+                    <Brain className="w-3.5 h-3.5" />
+                  </button>
                   <select value={item.status}
                     onChange={e => handleStatusChange(item, e.target.value)}
                     className="text-xs border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 bg-white cursor-pointer">
