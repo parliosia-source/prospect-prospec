@@ -56,11 +56,11 @@ export default function Hubz404Block() {
   return (
     <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
       <div className="bg-[hsl(var(--input))] px-4 py-3 border-b flex items-center justify-between">
-        <div className="flex items-center gap-2 hidden">
-          <PartyPopper className="w-4 h-4 text-pink-500" />
-          <span className="font-semibold text-sm text-slate-800">Hubz 404</span>
-          <span className="text-xs text-slate-400 font-normal">Événements saisonniers</span>
-        </div>
+        
+
+
+
+        
         <button onClick={loadItems} className="text-slate-400 hover:text-slate-600 transition-colors">
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
@@ -71,15 +71,15 @@ export default function Hubz404Block() {
         { key: "ALL", label: `Tous (${items.length})` },
         { key: "PARTY_WATCH", label: `🎉 Party (${partyCount})` },
         { key: "SALLE_VIP", label: `🏛 Salles (${salleCount})` }].
-        map((f) =>
-        <button key={f.key} onClick={() => setFilter(f.key)} className="text-xs px-3 py-1 rounded-full border transition-colors bg-white text-slate-500 border-slate-200 hover:border-pink-300 hidden">
+        map((f) => null
 
 
 
 
-          
-            {f.label}
-          </button>
+
+
+
+
         )}
       </div>
 
@@ -89,7 +89,7 @@ export default function Hubz404Block() {
         </div> :
       filtered.length === 0 ?
       <div className="py-10 text-center text-slate-400 text-sm px-4">
-          <PartyPopper className="lucide lucide-party-popper w-8 h-8 mx-auto mb-2 text-slate-300 hidden" />
+          
           Aucun compte saisonnier actif
         </div> :
 
