@@ -4,6 +4,9 @@ module.exports = {
     content: ["./index.html", "./src/**/*.{ts,tsx,js,jsx}"],
   theme: {
   	extend: {
+  		fontFamily: {
+  			inter: ['Inter', 'sans-serif'],
+  		},
   		borderRadius: {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',
@@ -59,24 +62,25 @@ module.exports = {
   				'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
   				border: 'hsl(var(--sidebar-border))',
   				ring: 'hsl(var(--sidebar-ring))'
+  			},
+  			laser: {
+  				blue: '#007BFF',
+  				red: '#FF3B30',
   			}
+  		},
+  		boxShadow: {
+  			'laser-blue': '0 0 16px rgba(0, 123, 255, 0.35)',
+  			'laser-red': '0 0 16px rgba(255, 59, 48, 0.35)',
+  			'glow-sm': '0 0 8px rgba(0, 123, 255, 0.2)',
   		},
   		keyframes: {
   			'accordion-down': {
-  				from: {
-  					height: '0'
-  				},
-  				to: {
-  					height: 'var(--radix-accordion-content-height)'
-  				}
+  				from: { height: '0' },
+  				to: { height: 'var(--radix-accordion-content-height)' }
   			},
   			'accordion-up': {
-  				from: {
-  					height: 'var(--radix-accordion-content-height)'
-  				},
-  				to: {
-  					height: '0'
-  				}
+  				from: { height: 'var(--radix-accordion-content-height)' },
+  				to: { height: '0' }
   			}
   		},
   		animation: {
@@ -85,5 +89,19 @@ module.exports = {
   		}
   	}
   },
+  safelist: [
+    'nav-active',
+    'parlios-card',
+    'parlios-card-red',
+    'parlios-card-neutral',
+    'btn-laser',
+    'topo-bg',
+    'text-laser-blue',
+    'text-laser-red',
+    'border-laser-blue',
+    'border-laser-red',
+    'bg-laser-blue',
+    'bg-laser-red',
+  ],
   plugins: [require("tailwindcss-animate")],
 }
