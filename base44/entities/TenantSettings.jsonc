@@ -73,6 +73,51 @@
     "isActive": {
       "type": "boolean",
       "default": true
+    },
+    "industryProfile": {
+      "type": "string",
+      "description": "Description libre du profil ICP / secteur cible"
+    },
+    "targetGeographies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Zones g\u00e9ographiques cibles (ex: 'Toronto, ON', 'Ontario', 'Canada')"
+    },
+    "searchKeywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Mots-cl\u00e9s de recherche de base pour ce tenant"
+    },
+    "excludedKeywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Mots-cl\u00e9s \u00e0 exclure syst\u00e9matiquement des r\u00e9sultats"
+    },
+    "scoringMode": {
+      "type": "string",
+      "enum": [
+        "RULES",
+        "AI"
+      ],
+      "default": "RULES",
+      "description": "RULES = logique de scoring par r\u00e8gles, AI = scoring estim\u00e9 par IA g\u00e9n\u00e9rique"
+    },
+    "scoringWeights": {
+      "type": "object",
+      "description": "Poids personnalis\u00e9s pour le scoring RULES (nullable)"
+    },
+    "fitThresholdDefault": {
+      "type": "number",
+      "description": "Seuil de score minimum par d\u00e9faut pour ce tenant (nullable)"
     }
   },
   "required": [

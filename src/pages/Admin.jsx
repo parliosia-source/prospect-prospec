@@ -23,6 +23,7 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState("templates");
   const [templates, setTemplates] = useState([]);
   const [settings, setSettings] = useState(null);
+  const [tenantSettings, setTenantSettings] = useState(null);
   const [logs, setLogs] = useState([]);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -61,6 +62,9 @@ export default function Admin() {
     const data = await base44.entities.AppSettings.filter({ settingsId: "global" });
     if (data.length > 0) setSettings(data[0]);
     else setSettings({ settingsId: "global", timezone: "America/Montreal", hotScoreThreshold: 75, gazetteLookaheadDays: 90, hunterMonthlyCreditLimit: 50, hunterSafetyBufferCredits: 5, defaultLanguageVariant: "FR_CA", enableSerpFallback: true });
+    const tData = await base44.entities.TenantSettings.filter({ settingsId: "global" });
+    if (tData.length > 0) setTenantSettings(tData[0]);
+    else setTenantSettings({ settingsId: "global", tenantId: "sync-default", companyName: "", targetGeographies: [], searchKeywords: [], excludedKeywords: [], scoringMode: "RULES", fitThresholdDefault: null, industryProfile: "" });
   };
 
   const loadLogs = async () => {
@@ -146,6 +150,13 @@ export default function Admin() {
       await base44.entities.AppSettings.update(settings.id, settings);
     } else {
       await base44.entities.AppSettings.create(settings);
+    }
+    if (tenantSettings) {
+      if (tenantSettings.id) {
+        await base44.entities.TenantSettings.update(tenantSettings.id, tenantSettings);
+      } else {
+        await base44.entities.TenantSettings.create(tenantSettings);
+      }
     }
     setIsSaving(false);
   };
@@ -297,6 +308,73 @@ export default function Admin() {
               <Label>Activer fallback SerpApi (si Brave échoue)</Label>
             </div>
           </div>
+          {/* TENANT SETTINGS — Recherche & Scoring */}
+          {tenantSettings && (
+            <div className="bg-white rounded-xl border p-5 space-y-4">
+              <h3 className="font-semibold text-slate-800">Tenant par défaut — Recherche & Scoring</h3>
+              <div>
+                <Label className="text-xs">Profil ICP / secteur cible</Label>
+                <Textarea
+                  value={tenantSettings.industryProfile || ""}
+                  onChange={e => setTenantSettings(s => ({ ...s, industryProfile: e.target.value }))}
+                  placeholder="Ex: Cabinets RH et de recrutement qui gèrent des événements internes ou des séminaires…"
+                  className="mt-1 text-sm h-20"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Géographies cibles (une par ligne)</Label>
+                <Textarea
+                  value={(tenantSettings.targetGeographies || []).join("\n")}
+                  onChange={e => setTenantSettings(s => ({ ...s, targetGeographies: e.target.value.split("\n").map(v => v.trim()).filter(Boolean) }))}
+                  placeholder="Toronto, ON&#10;Ontario&#10;Canada"
+                  className="mt-1 text-sm h-20 font-mono"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs">Mots-clés de recherche (virgule)</Label>
+                  <Input
+                    value={(tenantSettings.searchKeywords || []).join(", ")}
+                    onChange={e => setTenantSettings(s => ({ ...s, searchKeywords: e.target.value.split(",").map(v => v.trim()).filter(Boolean) }))}
+                    placeholder="ressources humaines, recrutement, RH"
+                    className="mt-1 h-8 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Mots-clés exclus (virgule)</Label>
+                  <Input
+                    value={(tenantSettings.excludedKeywords || []).join(", ")}
+                    onChange={e => setTenantSettings(s => ({ ...s, excludedKeywords: e.target.value.split(",").map(v => v.trim()).filter(Boolean) }))}
+                    placeholder="gouvernement, université"
+                    className="mt-1 h-8 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs">Mode scoring</Label>
+                  <Select value={tenantSettings.scoringMode || "RULES"} onValueChange={v => setTenantSettings(s => ({ ...s, scoringMode: v }))}>
+                    <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="RULES">RULES — par règles</SelectItem>
+                      <SelectItem value="AI">AI — générique IA</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Seuil score min. par défaut</Label>
+                  <Input
+                    type="number"
+                    value={tenantSettings.fitThresholdDefault ?? ""}
+                    onChange={e => setTenantSettings(s => ({ ...s, fitThresholdDefault: e.target.value === "" ? null : Number(e.target.value) }))}
+                    placeholder="0 = aucun filtre"
+                    className="mt-1 h-8 text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           <Button onClick={handleSaveSettings} disabled={isSaving} className="bg-blue-600 hover:bg-blue-700 gap-2">
             {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             Sauvegarder les paramètres
