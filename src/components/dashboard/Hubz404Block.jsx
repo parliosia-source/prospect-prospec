@@ -72,12 +72,12 @@ export default function Hubz404Block() {
         { key: "PARTY_WATCH", label: `🎉 Party (${partyCount})` },
         { key: "SALLE_VIP", label: `🏛 Salles (${salleCount})` }].
         map((f) =>
-        <button key={f.key} onClick={() => setFilter(f.key)}
-        className={`text-xs px-3 py-1 rounded-full border transition-colors ${
-        filter === f.key ?
-        "bg-pink-600 text-white border-pink-600" :
-        "bg-white text-slate-500 border-slate-200 hover:border-pink-300"}`
-        }>
+        <button key={f.key} onClick={() => setFilter(f.key)} className="text-xs px-3 py-1 rounded-full border transition-colors bg-white text-slate-500 border-slate-200 hover:border-pink-300 hidden">
+
+
+
+
+          
             {f.label}
           </button>
         )}
