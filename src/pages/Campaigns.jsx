@@ -112,12 +112,16 @@ export default function Campaigns() {
           {[1,2,3].map(i => <div key={i} className="h-24 bg-slate-100 rounded-xl animate-pulse" />)}
         </div>
       ) : campaigns.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-xl border">
-          <Search className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-          <p className="text-slate-500 font-medium">Aucune campagne</p>
-          <p className="text-sm text-slate-400 mt-1 mb-4">Créez votre première campagne pour démarrer la prospection</p>
-          <Button onClick={() => setShowModal(true)} className="bg-blue-600 hover:bg-blue-700">
-            <Plus className="w-4 h-4 mr-2" /> Créer une campagne
+        <div className="text-center py-16 bg-white rounded-xl border-2 border-dashed border-slate-200">
+          <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Search className="w-6 h-6 text-blue-400" />
+          </div>
+          <p className="text-slate-700 font-semibold mb-1">Créez votre première campagne</p>
+          <p className="text-sm text-slate-400 mt-1 mb-5 max-w-xs mx-auto">
+            Définissez votre marché cible et lancez une recherche automatique de prospects.
+          </p>
+          <Button onClick={() => setShowModal(true)} className="bg-blue-600 hover:bg-blue-700 gap-2">
+            <Plus className="w-4 h-4" /> Nouvelle campagne
           </Button>
         </div>
       ) : (

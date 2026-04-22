@@ -7,24 +7,19 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { X, Plus, Zap, Loader2, Database } from "lucide-react";
-
-const LOCATIONS = [
-  { value: "MONTREAL", label: "Montréal", query: "Montréal, QC" },
-  { value: "QUEBEC_CITY", label: "Québec", query: "Québec, QC" },
-  { value: "CANADA", label: "Canada", query: "Canada" },
-];
+import { X, Plus, Loader2, Database } from "lucide-react";
 
 const MAX_DISPLAYED_SECTORS = 12;
 
 export default function CampaignModal({ open, onClose, onSave }) {
   const [form, setForm] = useState({
     name: "", targetCount: 50, industrySectors: [], companySize: "ALL",
-    locationMode: "CITY", locationQuery: "Montréal, QC", locationKey: "MONTREAL", keywords: [],
+    locationMode: "CITY", locationQuery: "", locationKey: "CUSTOM", keywords: [],
     customSector: "", kbOnlyMode: false,
   });
   const [kwInput, setKwInput] = useState("");
   const [saving, setSaving] = useState(false);
+  const [tenantGeos, setTenantGeos] = useState([]);
 
   // Dynamic sector stats from KB
   const [sectorStats, setSectorStats] = useState([]);
@@ -35,9 +30,23 @@ export default function CampaignModal({ open, onClose, onSave }) {
   useEffect(() => {
     if (!open) return;
     setLoadingSectors(true);
-    base44.functions.invoke("getKbSectorStats", {}).then(res => {
-      setSectorStats(res.data?.sectors || []);
-    }).catch(() => {}).finally(() => setLoadingSectors(false));
+    // Load KB sector stats + tenant settings for prefill
+    Promise.all([
+      base44.functions.invoke("getKbSectorStats", {}).then(res => res.data?.sectors || []).catch(() => []),
+      base44.entities.TenantSettings.filter({ settingsId: "global" }).catch(() => []),
+    ]).then(([sectors, tenants]) => {
+      setSectorStats(sectors);
+      const tenant = tenants[0];
+      const geos = tenant?.targetGeographies || [];
+      setTenantGeos(geos);
+      if (geos.length > 0) {
+        setForm(f => ({ ...f, locationQuery: geos[0], locationKey: "CUSTOM" }));
+      }
+      // Prefill keywords from tenant if empty
+      if (tenant?.searchKeywords?.length > 0) {
+        setForm(f => ({ ...f, keywords: f.keywords.length > 0 ? f.keywords : [] }));
+      }
+    }).finally(() => setLoadingSectors(false));
   }, [open]);
 
   // Close suggestions on outside click
@@ -104,7 +113,6 @@ export default function CampaignModal({ open, onClose, onSave }) {
     });
   };
 
-  const selectedLocation = LOCATIONS.find(l => l.value === form.locationKey);
   const allSectors = [...form.industrySectors, ...(form.customSector.trim() ? [form.customSector.trim()] : [])];
 
   return (
@@ -124,28 +132,26 @@ export default function CampaignModal({ open, onClose, onSave }) {
 
           {/* Location */}
           <div>
-            <Label className="mb-2 block">Localisation *</Label>
-            <div className="flex gap-2">
-              {LOCATIONS.map(loc => (
-                <button
-                  key={loc.value}
-                  type="button"
-                  onClick={() => setForm(f => ({
-                    ...f,
-                    locationKey: loc.value,
-                    locationQuery: loc.query,
-                    locationMode: loc.value === "CANADA" ? "COUNTRY" : "CITY"
-                  }))}
-                  className={`flex-1 py-2.5 px-3 rounded-lg border text-sm font-medium transition-colors ${
-                    form.locationKey === loc.value
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-white text-slate-600 border-slate-200 hover:border-blue-300"
-                  }`}
-                >
-                  {loc.label}
-                </button>
-              ))}
-            </div>
+            <Label className="mb-1 block">Localisation *</Label>
+            <p className="text-xs text-slate-400 mb-2">Ville, région ou pays cible de la campagne</p>
+            <input
+              type="text"
+              value={form.locationQuery}
+              onChange={e => setForm(f => ({ ...f, locationQuery: e.target.value, locationKey: "CUSTOM" }))}
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              placeholder="Ex: Montréal, QC · Toronto, ON · Canada"
+            />
+            {tenantGeos.length > 1 && (
+              <div className="flex gap-1.5 mt-2 flex-wrap">
+                {tenantGeos.map(geo => (
+                  <button key={geo} type="button"
+                    onClick={() => setForm(f => ({ ...f, locationQuery: geo, locationKey: "CUSTOM" }))}
+                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${form.locationQuery === geo ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-600 border-slate-200 hover:border-blue-300"}`}>
+                    {geo}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Sectors (dynamic from KB) */}
@@ -307,13 +313,13 @@ export default function CampaignModal({ open, onClose, onSave }) {
           {form.name && (
             <div className="bg-slate-50 rounded-xl border p-3 text-xs text-slate-600 space-y-1">
               <div className="font-semibold text-slate-700 mb-1">Récapitulatif</div>
-              <div>📍 <strong>Lieu :</strong> {selectedLocation?.label || form.locationQuery}</div>
+              <div>📍 <strong>Lieu :</strong> {form.locationQuery || "—"}</div>
               {allSectors.length > 0 && <div>🏢 <strong>Secteur :</strong> {allSectors.join(", ")}</div>}
               {form.keywords.length > 0 && <div>🔑 <strong>Mots-clés :</strong> {form.keywords.join(", ")}</div>}
               <div>🎯 <strong>Objectif :</strong> {form.targetCount} prospects</div>
               {form.kbOnlyMode && (
                 <div className="flex items-center gap-1 text-blue-600">
-                  <Database className="w-3 h-3" /> <strong>Mode KB uniquement</strong>
+                  <Database className="w-3 h-3" /> <strong>Mode base de connaissances uniquement</strong>
                 </div>
               )}
             </div>

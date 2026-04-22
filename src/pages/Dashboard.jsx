@@ -4,12 +4,13 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { format, startOfDay, endOfDay } from "date-fns";
 import { fr } from "date-fns/locale";
-import { ChevronRight, Clock, AlertTriangle, Star, Building2, Plus } from "lucide-react";
+import { ChevronRight, Clock, AlertTriangle, Star, Building2, Plus, Settings, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import GazetteBlock from "@/components/dashboard/GazetteBlock";
 import PipelineHealth from "@/components/dashboard/PipelineHealth";
 import Hubz404Block from "@/components/dashboard/Hubz404Block";
 import CampaignModal from "@/components/campaigns/CampaignModal";
+import OnboardingWizard from "@/components/onboarding/OnboardingWizard";
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
@@ -17,6 +18,8 @@ export default function Dashboard() {
   const [topProspects, setTopProspects] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showCampaignModal, setShowCampaignModal] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [hasCampaigns, setHasCampaigns] = useState(true);
 
   useEffect(() => {
     base44.auth.me().then(setUser);
@@ -28,9 +31,16 @@ export default function Dashboard() {
     Promise.all([
       base44.entities.Lead.filter(f, "-nextActionDueAt", 100),
       base44.entities.Prospect.filter({ ...f, status: "QUALIFIÉ" }, "-relevanceScore", 10),
-    ]).then(([l, p]) => {
+      base44.entities.Campaign.filter(f, "-created_date", 1),
+      user.role === "admin" ? base44.entities.TenantSettings.filter({ settingsId: "global" }) : Promise.resolve([{ companyName: "ok" }]),
+    ]).then(([l, p, camps, tenants]) => {
       setLeads(l);
       setTopProspects(p.filter(x => (x.relevanceScore || 0) >= 75));
+      setHasCampaigns(camps.length > 0);
+      // Show onboarding if admin and config incomplete
+      if (user.role === "admin" && (tenants.length === 0 || !tenants[0]?.companyName)) {
+        setShowOnboarding(true);
+      }
       setIsLoading(false);
     });
   }, [user]);
@@ -53,6 +63,9 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-5 max-w-7xl mx-auto">
+      {showOnboarding && (
+        <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
@@ -74,6 +87,29 @@ export default function Dashboard() {
           );
         })}
       </div>
+
+      {/* Empty state — no campaigns yet */}
+      {!isLoading && !hasCampaigns && leads.length === 0 && (
+        <div className="bg-white rounded-2xl border-2 border-dashed border-slate-200 p-10 text-center">
+          <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Search className="w-6 h-6 text-blue-500" />
+          </div>
+          <h3 className="font-semibold text-slate-700 mb-1">Créez votre première campagne</h3>
+          <p className="text-sm text-slate-400 max-w-xs mx-auto mb-5">
+            Lancez une recherche automatique de prospects selon votre marché cible.
+          </p>
+          <div className="flex items-center justify-center gap-3">
+            <Button onClick={() => setShowCampaignModal(true)} className="bg-blue-600 hover:bg-blue-700 gap-2">
+              <Plus className="w-4 h-4" /> Nouvelle campagne
+            </Button>
+            {user?.role === "admin" && (
+              <Button variant="outline" onClick={() => setShowOnboarding(true)} className="gap-2">
+                <Settings className="w-4 h-4" /> Configurer l'app
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-4">

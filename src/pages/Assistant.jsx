@@ -201,14 +201,14 @@ export default function Assistant() {
         <div className="bg-white border-b px-5 py-3 flex items-center gap-3">
           <Bot className="w-5 h-5 text-blue-500" />
           <div>
-            <h2 className="font-semibold text-sm text-slate-800">Assistant SYNC</h2>
+            <h2 className="font-semibold text-sm text-slate-800">Assistant IA</h2>
             {contextEntity ? (
               <div className="flex items-center gap-1 text-xs text-blue-600">
                 <Building2 className="w-3 h-3" />
                 Contexte: {contextEntity.data.companyName}
               </div>
             ) : (
-              <p className="text-xs text-slate-400">Prospection événementielle · Décideurs · Messages prêts à copier</p>
+              <p className="text-xs text-slate-400">Analyse · Rédaction · Stratégie de prospection</p>
             )}
           </div>
           <div className="ml-auto flex items-center gap-1.5 text-xs text-green-600 bg-green-50 border border-green-200 rounded-full px-2.5 py-1">
@@ -222,15 +222,17 @@ export default function Assistant() {
           {!activeConvId ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <Bot className="w-12 h-12 text-slate-200 mb-3" />
-              <p className="text-slate-500 font-medium">Assistant SYNC — Prospection événementielle</p>
+              <p className="text-slate-500 font-medium">Assistant IA — Prospection B2B</p>
               <p className="text-sm text-slate-400 mt-1 max-w-sm">
-                Recherche d'événements, d'organisations cibles, de décideurs LinkedIn, et rédaction de messages personnalisés prêts à copier.
+                Analysez vos prospects, rédigez des messages personnalisés et obtenez des recommandations d'approche.
               </p>
               <div className="mt-4 grid grid-cols-1 gap-2 w-full max-w-sm">
                 {[
-                  "Quels événements corporatifs majeurs sont prévus au Québec cette année ?",
-                  "Trouve des entreprises du secteur assurances qui organisent leur propre conférence",
-                  "Identifie les décideurs LinkedIn chez Desjardins dans les communications",
+                  "Analyse ce prospect et propose un angle d'approche",
+                  "Rédige un premier message de prospection pour ce compte",
+                  "Résume pourquoi ce compte est pertinent pour notre offre",
+                  "Améliore ce message pour le rendre plus percutant",
+                  "Propose 3 accroches différentes pour ce prospect",
                 ].map(s => (
                   <button
                     key={s}

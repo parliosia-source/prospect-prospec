@@ -9,8 +9,10 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import ApiCostsSection from "../components/admin/ApiCostsSection";
 import KbCoverageMatrix from "../components/admin/KbCoverageMatrix";
+import ClientConfigSection from "../components/admin/ClientConfigSection";
 
 const TABS = [
+  { id: "config", label: "Configuration", icon: Settings },
   { id: "templates", label: "Templates", icon: FileText },
   { id: "settings", label: "Paramètres", icon: Settings },
   { id: "maintenance", label: "Maintenance", icon: Zap },
@@ -52,6 +54,9 @@ export default function Admin() {
     if (activeTab === "maintenance") loadMaintenance();
     if (activeTab === "logs") loadLogs();
   }, [activeTab]);
+
+  // Default to config tab
+  useEffect(() => { setActiveTab("config"); }, []);
 
   const loadTemplates = async () => {
     const data = await base44.entities.MessageTemplate.filter({}, "-created_date", 50);
@@ -185,6 +190,14 @@ export default function Admin() {
           );
         })}
       </div>
+
+      {/* CONFIGURATION CLIENT */}
+      {activeTab === "config" && (
+        <div>
+          <p className="text-sm text-slate-500 mb-5">Configurez les paramètres de votre instance — entreprise, marché cible, prospection et messages.</p>
+          <ClientConfigSection />
+        </div>
+      )}
 
       {/* TEMPLATES */}
       {activeTab === "templates" && (
