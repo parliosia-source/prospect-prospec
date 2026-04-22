@@ -38,7 +38,7 @@ export default function Layout({ children, currentPageName }) {
           }
         </div>
 
-        <nav className="bg-[hsl(var(--destructive))] px-2 py-3 flex-1 space-y-0.5 overflow-y-auto">
+        <nav className="bg-transparent px-2 py-3 flex-1 space-y-0.5 overflow-y-auto">
           {navItems.map(({ label, page, icon: Icon }) =>
           <Link
             key={page}
