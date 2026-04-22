@@ -55,7 +55,7 @@ export default function Hubz404Block() {
 
   return (
     <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b flex items-center justify-between">
+      <div className="bg-[hsl(var(--input))] px-4 py-3 border-b flex items-center justify-between">
         <div className="flex items-center gap-2 hidden">
           <PartyPopper className="w-4 h-4 text-pink-500" />
           <span className="font-semibold text-sm text-slate-800">Hubz 404</span>
@@ -89,7 +89,7 @@ export default function Hubz404Block() {
         </div> :
       filtered.length === 0 ?
       <div className="py-10 text-center text-slate-400 text-sm px-4">
-          <PartyPopper className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+          <PartyPopper className="lucide lucide-party-popper w-8 h-8 mx-auto mb-2 text-slate-300 hidden" />
           Aucun compte saisonnier actif
         </div> :
 
