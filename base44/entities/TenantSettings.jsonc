@@ -1,0 +1,104 @@
+{
+  "name": "TenantSettings",
+  "type": "object",
+  "properties": {
+    "settingsId": {
+      "type": "string"
+    },
+    "tenantId": {
+      "type": "string"
+    },
+    "tenantSlug": {
+      "type": "string"
+    },
+    "companyName": {
+      "type": "string"
+    },
+    "companyTagline": {
+      "type": "string"
+    },
+    "serviceOffering": {
+      "type": "string"
+    },
+    "targetMarket": {
+      "type": "string"
+    },
+    "defaultCity": {
+      "type": "string"
+    },
+    "defaultCountry": {
+      "type": "string",
+      "default": "CA"
+    },
+    "defaultLanguage": {
+      "type": "string",
+      "enum": [
+        "FR_CA",
+        "EN_CA",
+        "EN_US",
+        "FR_FR"
+      ],
+      "default": "FR_CA"
+    },
+    "senderTitle": {
+      "type": "string"
+    },
+    "messageTone": {
+      "type": "string",
+      "enum": [
+        "PROFESSIONNEL",
+        "CHALEUREUX",
+        "DIRECT"
+      ],
+      "default": "PROFESSIONNEL"
+    },
+    "icpKeywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "icpExcludedKeywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "botUserAgent": {
+      "type": "string",
+      "default": "ProspectBot/1.0"
+    },
+    "isActive": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "tenantId",
+    "settingsId"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

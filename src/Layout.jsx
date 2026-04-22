@@ -34,10 +34,7 @@ export default function Layout({ children, currentPageName }) {
         <div className={cn("flex items-center gap-2 h-14 px-4 border-b border-slate-700", collapsed && "justify-center px-0")}>
           <Zap className="w-5 h-5 text-blue-400 flex-shrink-0" />
           {!collapsed && (
-            <div>
-              <span className="font-bold text-sm text-white">SYNC</span>
-              <span className="text-slate-400 text-xs ml-1">Prospect</span>
-            </div>
+            <span className="font-bold text-sm text-white">Prospect</span>
           )}
         </div>
 

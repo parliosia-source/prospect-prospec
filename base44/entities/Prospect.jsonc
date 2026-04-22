@@ -2,6 +2,10 @@
   "name": "Prospect",
   "type": "object",
   "properties": {
+    "tenantId": {
+      "type": "string",
+      "description": "Identifiant du tenant propri\u00e9taire (nullable pour r\u00e9trocompatibilit\u00e9)"
+    },
     "campaignId": {
       "type": "string"
     },
