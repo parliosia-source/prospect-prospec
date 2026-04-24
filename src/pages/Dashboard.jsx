@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import GazetteBlock from "@/components/dashboard/GazetteBlock";
 import PipelineHealth from "@/components/dashboard/PipelineHealth";
 import Hubz404Block from "@/components/dashboard/Hubz404Block";
-import CampaignModal from "@/components/campaigns/CampaignModal";
+import CampaignModal from "@/components/campaigns/CampaignModal.jsx";
 import OnboardingWizard from "@/components/onboarding/OnboardingWizard";
 
 export default function Dashboard() {

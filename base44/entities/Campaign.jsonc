@@ -3,8 +3,7 @@
   "type": "object",
   "properties": {
     "tenantId": {
-      "type": "string",
-      "description": "Identifiant du tenant propri\u00e9taire"
+      "type": "string"
     },
     "name": {
       "type": "string"
@@ -30,17 +29,14 @@
         "WEB_ENRICHED",
         "AGENT"
       ],
-      "default": "WEB_ENRICHED",
-      "description": "Source de prospects: KB_ONLY=base existante, WEB_ENRICHED=recherche web, AGENT=agent autonome"
+      "default": "WEB_ENRICHED"
     },
     "kbOnlyMode": {
       "type": "boolean",
-      "default": false,
-      "description": "Conserv\u00e9 pour r\u00e9trocompatibilit\u00e9 \u2014 pr\u00e9f\u00e9rer sourceMode"
+      "default": false
     },
     "agentMissionId": {
-      "type": "string",
-      "description": "ID de l'AgentMission cr\u00e9\u00e9e si sourceMode=AGENT"
+      "type": "string"
     },
     "targetCount": {
       "type": "number",
@@ -74,6 +70,42 @@
     "locationQuery": {
       "type": "string"
     },
+    "targetCountry": {
+      "type": "string",
+      "description": "Pays cible normalis\u00e9 (ex: France, Canada)"
+    },
+    "targetRegion": {
+      "type": "string",
+      "description": "R\u00e9gion/province cible (ex: \u00cele-de-France, Qu\u00e9bec)"
+    },
+    "targetCity": {
+      "type": "string",
+      "description": "Ville cible (ex: Paris, Montr\u00e9al)"
+    },
+    "searchRadiusKm": {
+      "type": "number",
+      "description": "Rayon de recherche en km autour de la ville cible"
+    },
+    "industryCategory": {
+      "type": "string",
+      "description": "Cat\u00e9gorie de secteur normalis\u00e9e (ex: Agences marketing)"
+    },
+    "industrySubcategory": {
+      "type": "string",
+      "description": "Sous-cat\u00e9gorie de secteur (ex: B2B)"
+    },
+    "searchIntent": {
+      "type": "string",
+      "description": "Intention de recherche g\u00e9n\u00e9r\u00e9e par normalisation"
+    },
+    "rawLocationInput": {
+      "type": "string",
+      "description": "Saisie libre de localisation (mode avanc\u00e9)"
+    },
+    "rawIndustryInput": {
+      "type": "string",
+      "description": "Saisie libre de secteur (mode avanc\u00e9)"
+    },
     "keywords": {
       "type": "array",
       "items": {
@@ -101,8 +133,7 @@
       "default": 0
     },
     "agentBrief": {
-      "type": "string",
-      "description": "Brief de mission pour le Superagent (mode AGENT)"
+      "type": "string"
     },
     "queryPlan": {
       "type": "object"

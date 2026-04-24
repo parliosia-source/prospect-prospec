@@ -32,54 +32,147 @@ async function resolveTenant(base44, tenantId) {
 
 // ─── Geography resolution ──────────────────────────────────────────────────────
 function resolveGeographies(tenant, campaign) {
+  // Priorité : champs structurés > locationQuery > tenant defaults
+  if (campaign?.targetCity) return [campaign.targetCity, ...(campaign.targetRegion ? [campaign.targetRegion] : [])];
+  if (campaign?.targetRegion) return [campaign.targetRegion];
+  if (campaign?.targetCountry) return [campaign.targetCountry];
   if (campaign?.locationQuery) return [campaign.locationQuery];
   if (tenant.targetGeographies?.length > 0) return tenant.targetGeographies;
   if (tenant.defaultCity) return [`${tenant.defaultCity}, ${tenant.defaultCountry || "CA"}`];
   return ["Canada"];
 }
 
-// ─── Query builder ─────────────────────────────────────────────────────────────
+// ─── Domaines exclus par défaut (qualité) ─────────────────────────────────────
+const DEFAULT_EXCLUDED_DOMAINS = new Set([
+  "wikipedia.org", "fr.wikipedia.org", "en.wikipedia.org",
+  "pagesjaunes.fr", "pagesjaunes.ca", "yellowpages.ca", "yellowpages.com",
+  "yelp.com", "yelp.fr",
+  "linkedin.com", "facebook.com", "instagram.com", "twitter.com", "tiktok.com",
+  "tripadvisor.fr", "tripadvisor.com",
+  "leboncoin.fr", "kijiji.ca",
+  "annuaire.com", "annuaires.com", "kompass.com",
+  "societe.com", "infogreffe.fr",
+  "mappy.com", "google.com", "bing.com",
+  "lemonde.fr", "lefigaro.fr", "lesechos.fr",
+  "reddit.com", "quora.com", "medium.com",
+  "linternaute.com", "journaldunet.com",
+]);
+
+// Mots dans le snippet/titre qui signalent un résultat non-commercial à exclure
+const GENERIC_SNIPPET_PATTERNS = [
+  /liste des\b/i, /top \d+/i, /meilleurs? \w+/i, /comparatif/i, /comparateur/i,
+  /annuaire de\b/i, /répertoire de\b/i, /\bWikipédia\b/i, /pages jaunes/i,
+  /\bforum\b/i, /actualité\b/i, /\bnews\b/i,
+];
+
+// ─── Query builder (structuré + qualité) ─────────────────────────────────────
+const INDUSTRY_QUERY_MAP = {
+  "Agences marketing": {
+    "B2B": ["agence marketing B2B", "agence lead generation B2B", "agence demand generation", "agence inbound marketing B2B"],
+    "Digital": ["agence marketing digital", "agence growth hacking", "agence performance marketing"],
+    "Contenu & SEO": ["agence SEO", "agence content marketing", "agence rédaction web"],
+    "Performance & Paid": ["agence SEA Google Ads", "agence publicité digitale", "agence paid media"],
+    default: ["agence marketing", "agence acquisition clients", "agence génération de leads", "agence marketing digital"],
+  },
+  "Agences web": {
+    "Création de sites": ["agence création site web", "agence webdesign"],
+    "E-commerce": ["agence e-commerce", "agence Shopify"],
+    default: ["agence web", "agence création site internet", "agence développement web"],
+  },
+  "Cabinets de conseil": {
+    "Stratégie": ["cabinet conseil stratégie", "cabinet strategy consulting"],
+    "Digital & Transformation": ["cabinet transformation digitale", "cabinet conseil digital"],
+    default: ["cabinet conseil", "société conseil management", "cabinet consulting"],
+  },
+  "Immobilier": { default: ["agence immobilière", "promoteur immobilier", "cabinet immobilier"] },
+  "Assurance": { default: ["cabinet assurance", "courtier assurance", "compagnie assurance"] },
+  "SaaS B2B": { default: ["éditeur logiciel SaaS B2B", "startup SaaS", "logiciel entreprise"] },
+  "E-commerce": { default: ["boutique en ligne", "e-commerce", "site vente en ligne"] },
+  "Formation": { default: ["organisme formation", "centre formation professionnelle"] },
+  "Recrutement": { default: ["cabinet recrutement", "agence emploi", "chasseur de têtes"] },
+  "Événementiel": {
+    "Agences événementielles": ["agence événementielle corporate", "agence organisation séminaires", "agence team building"],
+    "Venues & Salles": ["salle réception", "venue événements", "lieu séminaire"],
+    "Traiteur": ["traiteur événements", "traiteur corporate"],
+    default: ["agence événementielle", "organisateur événements", "prestataire événementiel"],
+  },
+  "Associations / OBNL": { default: ["association", "OBNL", "organisme à but non lucratif", "fédération"] },
+  "Institutions publiques": { default: ["collectivité territoriale", "établissement public", "institution publique"] },
+  "Santé": { default: ["établissement santé", "clinique", "groupe médical"] },
+  "Industrie": { default: ["entreprise industrielle", "groupe industriel", "fabricant"] },
+  "Restauration": { default: ["restaurant", "groupe restauration", "chaîne restauration"] },
+  "Services professionnels": { default: ["cabinet comptable", "cabinet juridique", "prestataire services professionnels"] },
+};
+
 function buildSearchQueries(tenant, campaign, geographies) {
   const queries = [];
-  const baseKeywords = [
-    ...(campaign?.keywords || []),
-    ...(tenant.searchKeywords || []),
-  ];
-  const sectors = campaign?.industrySectors || [];
-  const excluded = [
-    ...(tenant.excludedKeywords || []),
-    ...(campaign?.extraExcludedDomains || []),
-  ];
-  const exclusionStr = excluded.length > 0
-    ? ` -${excluded.slice(0, 3).join(" -")}`
-    : "";
+  const geoStr = campaign?.targetCity
+    || campaign?.targetRegion
+    || campaign?.targetCountry
+    || (geographies[0] || "");
 
-  for (const geo of geographies.slice(0, 3)) {
-    if (sectors.length > 0) {
-      for (const sector of sectors.slice(0, 4)) {
-        if (baseKeywords.length > 0) {
-          queries.push(`${sector} ${baseKeywords.slice(0, 2).join(" ")} ${geo}${exclusionStr}`);
-        } else {
-          queries.push(`${sector} entreprises ${geo}${exclusionStr}`);
-        }
+  const extraKeywords = campaign?.keywords || [];
+  const category = campaign?.industryCategory;
+  const subcategory = campaign?.industrySubcategory;
+
+  // 1. Requêtes structurées (haute qualité)
+  if (category && INDUSTRY_QUERY_MAP[category]) {
+    const map = INDUSTRY_QUERY_MAP[category];
+    const templates = (subcategory && map[subcategory]) ? map[subcategory] : map.default;
+    for (const tpl of templates.slice(0, 5)) {
+      if (geoStr) {
+        queries.push(`"${tpl}" "${geoStr}"`);
+      } else {
+        queries.push(`"${tpl}"`);
       }
-    } else if (baseKeywords.length > 0) {
-      queries.push(`${baseKeywords.slice(0, 3).join(" ")} ${geo}${exclusionStr}`);
+    }
+    // Variante avec mots-clés extra
+    if (extraKeywords.length > 0 && geoStr) {
+      queries.push(`"${templates[0]}" ${extraKeywords.slice(0, 2).join(" ")} "${geoStr}"`);
+    }
+
+  } else if (campaign?.rawIndustryInput) {
+    // Mode avancé
+    if (geoStr) {
+      queries.push(`"${campaign.rawIndustryInput}" "${geoStr}"`);
+      queries.push(`${campaign.rawIndustryInput} entreprise site:*.com OR site:*.fr "${geoStr}"`);
     } else {
-      const profileHint = tenant.industryProfile
-        ? tenant.industryProfile.split(" ").slice(0, 4).join(" ")
-        : "entreprises";
-      queries.push(`${profileHint} ${geo}`);
+      queries.push(`"${campaign.rawIndustryInput}"`);
+    }
+    if (extraKeywords.length > 0) {
+      queries.push(`${campaign.rawIndustryInput} ${extraKeywords.slice(0, 2).join(" ")} ${geoStr}`);
+    }
+
+  } else if (campaign?.industrySectors?.length > 0) {
+    // Rétrocompatibilité secteurs libres
+    for (const sector of campaign.industrySectors.slice(0, 3)) {
+      if (extraKeywords.length > 0) {
+        queries.push(`"${sector}" ${extraKeywords.slice(0, 2).join(" ")} "${geoStr || ""}"`);
+      } else {
+        queries.push(`"${sector}" entreprise "${geoStr || ""}"`);
+      }
+    }
+
+  } else if (extraKeywords.length > 0) {
+    queries.push(`${extraKeywords.slice(0, 3).join(" ")} ${geoStr}`);
+
+  } else {
+    const profileHint = tenant.industryProfile
+      ? tenant.industryProfile.split(" ").slice(0, 4).join(" ")
+      : "entreprises";
+    queries.push(`${profileHint} ${geoStr}`);
+  }
+
+  // Variante rayon si défini
+  if (campaign?.searchRadiusKm && campaign?.targetCity && queries.length > 0) {
+    const regionLabel = campaign.targetRegion || campaign.targetCountry || "";
+    if (regionLabel && !queries.some(q => q.includes(regionLabel))) {
+      const base = queries[0].replace(`"${campaign.targetCity}"`, `"${regionLabel}"`);
+      if (base !== queries[0]) queries.push(base);
     }
   }
 
-  if (campaign?.agentBrief) {
-    const briefWords = campaign.agentBrief.split(" ").slice(0, 6).join(" ");
-    const geo = geographies[0] || "Canada";
-    queries.push(`${briefWords} ${geo}`);
-  }
-
-  return queries.slice(0, 10);
+  return queries.slice(0, 12);
 }
 
 // ─── Scoring ───────────────────────────────────────────────────────────────────
@@ -300,10 +393,17 @@ export async function runSearchEngine(base44, campaign, options = {}) {
       for (const result of results) {
         const p = normalizeProspect(result, campaign.id, tenant.tenantId);
         if (!p.domain) { excludedCount++; continue; }
+        // Exclusions par défaut (qualité)
+        if (DEFAULT_EXCLUDED_DOMAINS.has(p.domain)) { excludedCount++; continue; }
+        if (DEFAULT_EXCLUDED_DOMAINS.has(p.domain.replace(/^[^.]+\./, ""))) { excludedCount++; continue; }
+        // Exclusions campagne/tenant
         if (excludedDomains.has(p.domain)) { excludedCount++; continue; }
         if (existingDomains.has(p.domain)) { excludedCount++; continue; }
         const text = `${p.serpSnippet} ${p.companyName}`.toLowerCase();
         if (excludedKws.some(kw => text.includes(kw.toLowerCase()))) { excludedCount++; continue; }
+        // Filtre snippets génériques (annuaires, listes, blogs)
+        const rawText = `${result.title || ""} ${result.description || ""}`;
+        if (GENERIC_SNIPPET_PATTERNS.some(re => re.test(rawText))) { excludedCount++; continue; }
         allProspects.push(p);
       }
 

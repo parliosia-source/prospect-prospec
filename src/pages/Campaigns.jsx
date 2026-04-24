@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 import StatusBadge from "@/components/shared/StatusBadge";
-import CampaignModal from "@/components/campaigns/CampaignModal";
+import CampaignModal from "@/components/campaigns/CampaignModal.jsx";
 import {
   AlertDialog,
   AlertDialogAction,
