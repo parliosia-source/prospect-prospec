@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { base44 } from "@/api/base44Client";
-import { LayoutDashboard, Search, Target, Bot, Settings, LogOut, ChevronLeft, ChevronRight, Zap } from "lucide-react";
+import { LayoutDashboard, Search, Target, Bot, Settings, LogOut, ChevronLeft, ChevronRight, Zap, Cpu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -22,7 +22,7 @@ export default function Layout({ children, currentPageName }) {
   }, []);
 
   const navItems = user?.role === "admin" ?
-  [...NAV, { label: "Admin", page: "Admin", icon: Settings }] :
+  [...NAV, { label: "Missions agent", page: "AgentMissions", icon: Cpu }, { label: "Admin", page: "Admin", icon: Settings }] :
   NAV;
 
   return (
