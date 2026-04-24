@@ -294,8 +294,8 @@ export default function CampaignModal({ open, onClose, onSave }) {
                 {
                   value: "AGENT",
                   icon: Bot,
-                  title: "Agent autonome",
-                  desc: "Prépare une mission pour un Superagent : recherche, qualification, scoring et génération de messages.",
+                  title: "Superagent autonome",
+                  desc: "Prépare une mission pour un Superagent Base44 externe à l'app : recherche, qualification, scoring et génération de messages.",
                   color: "purple",
                 },
               ].map(({ value, icon: Icon, title, desc, color }) => {
@@ -333,7 +333,7 @@ export default function CampaignModal({ open, onClose, onSave }) {
             {/* Brief pour le mode Agent */}
             {form.sourceMode === "AGENT" && (
               <div className="mt-3">
-                <Label className="text-xs text-slate-600 mb-1 block">Brief de mission pour l'agent</Label>
+                <Label className="text-xs text-slate-600 mb-1 block">Brief de mission pour le Superagent Base44</Label>
                 <textarea
                   value={form.agentBrief}
                   onChange={e => setForm(f => ({ ...f, agentBrief: e.target.value }))}
@@ -377,7 +377,7 @@ export default function CampaignModal({ open, onClose, onSave }) {
               <div>
                 {form.sourceMode === "KB_ONLY" && <span className="flex items-center gap-1 text-blue-600"><Database className="w-3 h-3" /> <strong>Base existante</strong></span>}
                 {form.sourceMode === "WEB_ENRICHED" && <span className="flex items-center gap-1 text-green-600"><Globe className="w-3 h-3" /> <strong>Recherche web enrichie</strong></span>}
-                {form.sourceMode === "AGENT" && <span className="flex items-center gap-1 text-purple-600"><Bot className="w-3 h-3" /> <strong>Agent autonome</strong></span>}
+                {form.sourceMode === "AGENT" && <span className="flex items-center gap-1 text-purple-600"><Bot className="w-3 h-3" /> <strong>Superagent autonome</strong></span>}
               </div>
             </div>
           )}

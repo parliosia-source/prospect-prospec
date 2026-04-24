@@ -123,7 +123,7 @@ export default function AgentMissionDetail() {
       {/* Back */}
       <div className="flex items-center gap-3">
         <Link to={createPageUrl("AgentMissions")} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
-          <ArrowLeft className="w-4 h-4" /> Missions agent
+          <ArrowLeft className="w-4 h-4" /> Missions Superagent
         </Link>
         {mission?.campaignId && (
           <Link
@@ -172,7 +172,7 @@ export default function AgentMissionDetail() {
               >
                 {isExecuting
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Exécution en cours…</>
-                  : <><Bot className="w-4 h-4" /> Exécuter la mission</>}
+                  : <><Bot className="w-4 h-4" /> Exécuter via Superagent</>}
               </Button>
             )}
 
@@ -226,7 +226,7 @@ export default function AgentMissionDetail() {
       {/* Brief complet */}
       <div className="bg-white rounded-xl border shadow-sm p-5">
         <h2 className="font-semibold text-sm text-slate-800 mb-3 flex items-center gap-2">
-          <Bot className="w-4 h-4 text-purple-500" /> Brief de mission
+          <Bot className="w-4 h-4 text-purple-500" /> Brief de mission Superagent
         </h2>
         {mission.brief ? (
           <div className="bg-purple-50 border border-purple-100 rounded-lg px-4 py-3 text-sm text-purple-900 leading-relaxed whitespace-pre-wrap">

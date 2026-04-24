@@ -302,9 +302,9 @@ export default function CampaignDetail() {
             <div className="mt-3 rounded-xl px-4 py-3 text-sm flex items-start gap-3 bg-purple-50 border-2 border-purple-200 text-purple-800">
               <Bot className="w-5 h-5 text-purple-500 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <div className="font-semibold mb-1">Mission agent créée — en attente d'exécution</div>
+                <div className="font-semibold mb-1">Mission Superagent créée — en attente d'exécution</div>
                 <p className="text-xs text-purple-600 mb-2">
-                  Aucun prospect n'a encore été ajouté. La campagne passera en <strong>Terminé</strong> uniquement lorsque le Superagent aura complété sa mission.
+                  Aucun prospect n'a encore été ajouté. La campagne passera en <strong>Terminé</strong> uniquement lorsque le Superagent Base44 aura complété sa mission depuis l'espace /superagent.
                 </p>
                 {campaign.agentMissionId && (
                   <div className="text-xs font-mono bg-purple-100 rounded px-2 py-1 text-purple-700 inline-block">

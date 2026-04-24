@@ -22,7 +22,7 @@ export default function Layout({ children, currentPageName }) {
   }, []);
 
   const navItems = user?.role === "admin" ?
-  [...NAV, { label: "Missions agent", page: "AgentMissions", icon: Cpu }, { label: "Admin", page: "Admin", icon: Settings }] :
+  [...NAV, { label: "Missions Superagent", page: "AgentMissions", icon: Cpu }, { label: "Admin", page: "Admin", icon: Settings }] :
   NAV;
 
   return (

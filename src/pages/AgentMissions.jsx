@@ -78,9 +78,9 @@ export default function AgentMissions() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Bot className="w-5 h-5 text-purple-500" />
-            <h1 className="text-2xl font-bold text-slate-900">Missions agent</h1>
+            <h1 className="text-2xl font-bold text-slate-900">Missions Superagent</h1>
           </div>
-          <p className="text-sm text-slate-500">Suivi des missions créées par les campagnes en mode Agent autonome</p>
+          <p className="text-sm text-slate-500">Suivi des missions destinées aux Superagents Base44 externes (/superagent), créées par les campagnes en mode Superagent autonome</p>
         </div>
         <Button variant="outline" size="sm" onClick={loadAll} className="gap-2">
           <RefreshCw className="w-3.5 h-3.5" /> Actualiser
@@ -96,9 +96,9 @@ export default function AgentMissions() {
           <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <Bot className="w-6 h-6 text-purple-400" />
           </div>
-          <p className="text-slate-700 font-semibold mb-1">Aucune mission agent</p>
+          <p className="text-slate-700 font-semibold mb-1">Aucune mission Superagent</p>
           <p className="text-sm text-slate-400 mt-1 max-w-xs mx-auto">
-            Les missions apparaissent ici lorsqu'une campagne est lancée en mode <strong>Agent autonome</strong>.
+            Les missions apparaissent ici lorsqu'une campagne est lancée en mode <strong>Superagent autonome</strong>.
           </p>
         </div>
       ) : (
