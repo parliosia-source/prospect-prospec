@@ -296,14 +296,40 @@ export default function CampaignDetail() {
             </div>
           </div>
 
-          {/* DONE_PARTIAL — neutral message only */}
-          {campaign.status === "DONE_PARTIAL" && (
+          {/* Mission agent PENDING — mode AGENT */}
+          {campaign.sourceMode === "AGENT" && campaign.status === "COMPLETED" && campaign.toolUsage?.missionId && (
+            <div className="mt-3 rounded-xl px-4 py-3 text-sm flex items-start gap-2 bg-purple-50 border border-purple-200 text-purple-800">
+              <span className="mt-0.5 text-lg">🤖</span>
+              <div className="flex-1">
+                <div className="font-semibold mb-0.5">Mission agent créée — en attente d'exécution</div>
+                <p className="text-xs text-purple-600 mb-2">
+                  Un Superagent doit être assigné pour exécuter cette mission. Rendez-vous dans <strong>Admin → Missions</strong> pour l'assigner.
+                </p>
+                <div className="text-xs font-mono bg-purple-100 rounded px-2 py-1 text-purple-700">
+                  ID mission : {campaign.toolUsage.missionId}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* DONE_PARTIAL — avec recommandation contextuelle selon sourceMode */}
+          {campaign.status === "DONE_PARTIAL" && campaign.sourceMode !== "AGENT" && (
             <div className="mt-3 rounded-xl px-4 py-3 text-sm flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800">
               <span className="mt-0.5 text-amber-500">ℹ</span>
               <div className="flex-1">
                 <span className="font-medium">Résultats partiels — </span>
                 {counts["Tous"]} prospects trouvés avec les critères actuels.
-                {campaign.toolUsage?.suggestedNextStep === "RELAX_FILTERS" && (
+                {campaign.toolUsage?.userMessage && (
+                  <div className="text-xs mt-2 p-2 bg-amber-100 rounded border border-amber-200">
+                    💡 {campaign.toolUsage.userMessage}
+                  </div>
+                )}
+                {!campaign.toolUsage?.userMessage && campaign.toolUsage?.suggestedNextStep === "SWITCH_TO_WEB_ENRICHED" && (
+                  <div className="text-xs mt-2 p-2 bg-amber-100 rounded border border-amber-200">
+                    <strong>💡 Conseil :</strong> passez en mode <strong>Recherche web enrichie</strong> pour trouver plus de prospects au-delà de la base de connaissances.
+                  </div>
+                )}
+                {!campaign.toolUsage?.userMessage && campaign.toolUsage?.suggestedNextStep === "RELAX_FILTERS" && (
                   <div className="text-xs mt-2 p-2 bg-amber-100 rounded border border-amber-200">
                     <strong>💡 Conseil :</strong> réduisez les secteurs filtrés, élargissez la zone géographique ou supprimez certains mots-clés.
                   </div>

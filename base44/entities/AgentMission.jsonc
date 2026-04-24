@@ -1,0 +1,98 @@
+{
+  "name": "AgentMission",
+  "type": "object",
+  "properties": {
+    "campaignId": {
+      "type": "string",
+      "description": "ID de la campagne associ\u00e9e"
+    },
+    "tenantId": {
+      "type": "string"
+    },
+    "ownerUserId": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "COMPLETED",
+        "FAILED"
+      ],
+      "default": "PENDING",
+      "description": "Statut de la mission agent"
+    },
+    "brief": {
+      "type": "string",
+      "description": "Brief de mission r\u00e9dig\u00e9 pour le Superagent"
+    },
+    "missionParams": {
+      "type": "object",
+      "description": "Param\u00e8tres structur\u00e9s de la mission (cible, zone, secteur, objectif, etc.)"
+    },
+    "agentName": {
+      "type": "string",
+      "description": "Nom du Superagent assign\u00e9 (nullable)"
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resultSummary": {
+      "type": "string",
+      "description": "R\u00e9sum\u00e9 des r\u00e9sultats produits par l'agent"
+    },
+    "errorMessage": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "campaignId"
+  ],
+  "rls": {
+    "create": {
+      "created_by": "{{user.email}}"
+    },
+    "read": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "created_by": "{{user.email}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}
