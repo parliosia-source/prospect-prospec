@@ -170,7 +170,7 @@ export default function Campaigns() {
                       </Button>
                     )}
 
-                    {["DONE_PARTIAL", "DONE", "FAILED", "CANCELED", "COMPLETED", "DRAFT"].includes(c.status) && (
+                    {["DONE_PARTIAL", "DONE", "FAILED", "CANCELED", "COMPLETED", "DRAFT", "WAITING_AGENT"].includes(c.status) && (
                       <Button
                         size="sm"
                         variant="ghost"

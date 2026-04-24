@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { ArrowLeft, Brain, ExternalLink, Building2, MapPin, ChevronRight, RefreshCw, Clock, Trash2, AlertCircle } from "lucide-react";
+import { ArrowLeft, Brain, ExternalLink, Building2, MapPin, ChevronRight, RefreshCw, Clock, Trash2, AlertCircle, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/shared/StatusBadge";
 import {
@@ -76,10 +76,10 @@ export default function CampaignDetail() {
     loadAll();
   }, [campaignId]);
 
-  // Poll while RUNNING (search) OR analysis RUNNING — fixed interval, no stacking
+  // Poll while RUNNING (search) OR WAITING_AGENT OR analysis RUNNING
   const pollStartRef = useRef(null);
   useEffect(() => {
-    const shouldPoll = campaign?.status === "RUNNING" || campaign?.analysisStatus === "RUNNING";
+    const shouldPoll = campaign?.status === "RUNNING" || campaign?.status === "WAITING_AGENT" || campaign?.analysisStatus === "RUNNING";
     // Always clear any existing interval first
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -287,7 +287,7 @@ export default function CampaignDetail() {
                   Annuler la recherche
                 </Button>
               )}
-              {["DONE_PARTIAL", "DONE", "FAILED", "CANCELED", "COMPLETED", "DRAFT"].includes(campaign.status) && (
+              {["DONE_PARTIAL", "DONE", "FAILED", "CANCELED", "COMPLETED", "DRAFT", "WAITING_AGENT"].includes(campaign.status) && (
                 <Button variant="outline" onClick={() => setDeleteDialog(true)} className="gap-2 text-red-600 border-red-200 hover:bg-red-50">
                   <Trash2 className="w-4 h-4" />
                   Supprimer
@@ -296,18 +296,26 @@ export default function CampaignDetail() {
             </div>
           </div>
 
-          {/* Mission agent PENDING — mode AGENT */}
-          {campaign.sourceMode === "AGENT" && campaign.status === "COMPLETED" && campaign.toolUsage?.missionId && (
-            <div className="mt-3 rounded-xl px-4 py-3 text-sm flex items-start gap-2 bg-purple-50 border border-purple-200 text-purple-800">
-              <span className="mt-0.5 text-lg">🤖</span>
+          {/* Bandeau WAITING_AGENT — mission créée, Superagent pas encore exécuté */}
+          {campaign.status === "WAITING_AGENT" && (
+            <div className="mt-3 rounded-xl px-4 py-3 text-sm flex items-start gap-3 bg-purple-50 border-2 border-purple-200 text-purple-800">
+              <Bot className="w-5 h-5 text-purple-500 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <div className="font-semibold mb-0.5">Mission agent créée — en attente d'exécution</div>
+                <div className="font-semibold mb-1">Mission agent créée — en attente d'exécution</div>
                 <p className="text-xs text-purple-600 mb-2">
-                  Un Superagent doit être assigné pour exécuter cette mission. Rendez-vous dans <strong>Admin → Missions</strong> pour l'assigner.
+                  Aucun prospect n'a encore été ajouté. La campagne passera en <strong>Terminé</strong> uniquement lorsque le Superagent aura complété sa mission.
                 </p>
-                <div className="text-xs font-mono bg-purple-100 rounded px-2 py-1 text-purple-700">
-                  ID mission : {campaign.toolUsage.missionId}
-                </div>
+                {campaign.agentMissionId && (
+                  <div className="text-xs font-mono bg-purple-100 rounded px-2 py-1 text-purple-700 inline-block">
+                    Mission ID : {campaign.agentMissionId}
+                  </div>
+                )}
+              </div>
+              <div className="flex-shrink-0">
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-600 rounded-full text-xs font-medium">
+                  <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-pulse" />
+                  En attente
+                </span>
               </div>
             </div>
           )}

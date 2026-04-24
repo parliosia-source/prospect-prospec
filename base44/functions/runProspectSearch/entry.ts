@@ -3,21 +3,18 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 // ─── Résolution du tenant ─────────────────────────────────────────────────────
 async function resolveTenant(base44, payload, campaign) {
   const tenantId = payload.tenantId || campaign?.tenantId || "sync-default";
-
   try {
     const results = await base44.asServiceRole.entities.TenantSettings.filter(
       { tenantId, isActive: true }, "-created_date", 1
     );
     if (results?.length > 0) return results[0];
   } catch (_) {}
-
   try {
     const fallback = await base44.asServiceRole.entities.TenantSettings.filter(
       { settingsId: "global" }, "-created_date", 1
     );
     if (fallback?.length > 0) return fallback[0];
   } catch (_) {}
-
   return {
     tenantId: "sync-default",
     companyName: "Prospect",
@@ -41,7 +38,7 @@ function resolveGeographies(tenant, campaign) {
   return ["Canada"];
 }
 
-// ─── Construction des requêtes de recherche ───────────────────────────────────
+// ─── Construction des requêtes ────────────────────────────────────────────────
 function buildSearchQueries(tenant, campaign, geographies) {
   const queries = [];
   const baseKeywords = [
@@ -53,9 +50,7 @@ function buildSearchQueries(tenant, campaign, geographies) {
     ...(tenant.excludedKeywords || []),
     ...(campaign?.extraExcludedDomains || []),
   ];
-  const exclusionStr = excluded.length > 0
-    ? ` -${excluded.slice(0, 3).join(" -")}`
-    : "";
+  const exclusionStr = excluded.length > 0 ? ` -${excluded.slice(0, 3).join(" -")}` : "";
 
   for (const geo of geographies.slice(0, 3)) {
     if (sectors.length > 0) {
@@ -75,17 +70,13 @@ function buildSearchQueries(tenant, campaign, geographies) {
       queries.push(`${profileHint} ${geo}`);
     }
   }
-
   return queries.slice(0, 10);
 }
 
-// ─── Scoring ─────────────────────────────────────────────────────────────────
+// ─── Scoring ──────────────────────────────────────────────────────────────────
 function scoreProspect(prospect, tenant, campaign) {
-  const scoringMode = tenant.scoringMode || "RULES";
+  if ((tenant.scoringMode || "RULES") === "AI") return 50;
   const weights = tenant.scoringWeights || {};
-
-  if (scoringMode === "AI") return 50;
-
   let score = 0;
   const wGeo = weights.geo ?? 30;
   const wSector = weights.sector ?? 25;
@@ -94,37 +85,26 @@ function scoreProspect(prospect, tenant, campaign) {
   const wEventFit = weights.eventFit ?? 10;
 
   const sectors = campaign?.industrySectors || [];
-  const keywords = [
-    ...(campaign?.keywords || []),
-    ...(tenant.searchKeywords || []),
-  ];
+  const keywords = [...(campaign?.keywords || []), ...(tenant.searchKeywords || [])];
   const geographies = resolveGeographies(tenant, campaign);
 
   const locationStr = JSON.stringify(prospect.location || {}).toLowerCase();
-  const geoMatch = geographies.some(g =>
-    locationStr.includes(g.toLowerCase().split(",")[0].trim().toLowerCase())
-  );
-  if (geoMatch) score += wGeo;
+  if (geographies.some(g => locationStr.includes(g.toLowerCase().split(",")[0].trim()))) score += wGeo;
 
   const prospectSectors = (prospect.industrySectors || []).map(s => s.toLowerCase());
-  const sectorMatch = sectors.some(s => prospectSectors.includes(s.toLowerCase()));
-  if (sectorMatch) score += wSector;
+  if (sectors.some(s => prospectSectors.includes(s.toLowerCase()))) score += wSector;
 
   const companyStr = `${prospect.companyName || ""} ${prospect.serpSnippet || ""}`.toLowerCase();
-  const kwMatch = keywords.some(k => companyStr.includes(k.toLowerCase()));
-  if (kwMatch) score += wKeyword;
+  if (keywords.some(k => companyStr.includes(k.toLowerCase()))) score += wKeyword;
 
   if (prospect.domain && !prospect.domain.includes("linkedin") && !prospect.domain.includes("facebook")) {
     score += wDomain;
   }
-
-  const eventFit = prospect.eventFitScore || 0;
-  score += Math.round((eventFit / 100) * wEventFit);
-
+  score += Math.round(((prospect.eventFitScore || 0) / 100) * wEventFit);
   return Math.min(100, Math.max(0, score));
 }
 
-// ─── Recherche Brave ──────────────────────────────────────────────────────────
+// ─── Brave Search ─────────────────────────────────────────────────────────────
 async function searchBrave(query, apiKey, maxResults = 5) {
   const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}&country=CA`;
   const res = await fetch(url, {
@@ -139,7 +119,7 @@ async function searchBrave(query, apiKey, maxResults = 5) {
   return data.web?.results || [];
 }
 
-// ─── Extraction domaine ───────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function extractDomain(url) {
   try {
     const u = new URL(url.startsWith("http") ? url : `https://${url}`);
@@ -147,7 +127,6 @@ function extractDomain(url) {
   } catch (_) { return ""; }
 }
 
-// ─── Normalisation prospect ───────────────────────────────────────────────────
 function normalizeProspect(result, campaignId, tenantId) {
   const domain = extractDomain(result.url || "");
   return {
@@ -165,7 +144,6 @@ function normalizeProspect(result, campaignId, tenantId) {
   };
 }
 
-// ─── Déduplication ────────────────────────────────────────────────────────────
 function deduplicateByDomain(prospects) {
   const seen = new Set();
   return prospects.filter(p => {
@@ -175,55 +153,37 @@ function deduplicateByDomain(prospects) {
   });
 }
 
-// ─── Chargement des exclusions ────────────────────────────────────────────────
 async function loadExcludedDomains(base44, tenantId, campaignId) {
   const excluded = new Set();
   try {
-    const globalExclusions = await base44.asServiceRole.entities.ExclusionEntry.filter(
+    const global = await base44.asServiceRole.entities.ExclusionEntry.filter(
       { exclusionType: "GLOBAL", isActive: true }, "-created_date", 500
     );
-    for (const e of globalExclusions) {
-      if (e.domain) excluded.add(e.domain.toLowerCase());
-    }
-    const campExclusions = await base44.asServiceRole.entities.ExclusionEntry.filter(
+    for (const e of global) { if (e.domain) excluded.add(e.domain.toLowerCase()); }
+    const camp = await base44.asServiceRole.entities.ExclusionEntry.filter(
       { campaignId, isActive: true }, "-created_date", 200
     );
-    for (const e of campExclusions) {
-      if (e.domain) excluded.add(e.domain.toLowerCase());
-    }
+    for (const e of camp) { if (e.domain) excluded.add(e.domain.toLowerCase()); }
   } catch (_) {}
   return excluded;
 }
 
-// ─── KB top-up (réutilisé par KB_ONLY et WEB_ENRICHED) ───────────────────────
+// ─── KB top-up ────────────────────────────────────────────────────────────────
 async function kbTopUp(base44, campaign, tenant, existingDomains, target, kbTierFilter) {
   const sectors = campaign?.industrySectors || [];
-
-  // Déterminer le tier minimum selon le filtre
-  let tierFilter = {};
-  if (kbTierFilter === "VERIFIED_ONLY") {
-    tierFilter = { kbTier: "VERIFIED" };
-  } else if (kbTierFilter === "PROBABLE_AND_ABOVE") {
-    // On récupère VERIFIED + PROBABLE
-    tierFilter = {};
-  }
+  const tierOrder = { VERIFIED: 3, PROBABLE: 2, UNVERIFIED: 1 };
+  const minTier = kbTierFilter === "VERIFIED_ONLY" ? 3 : kbTierFilter === "PROBABLE_AND_ABOVE" ? 2 : 1;
 
   try {
     const kbEntities = await base44.asServiceRole.entities.KBEntityV3.filter(
-      { isExcluded: false, ...tierFilter }, "-confidenceScore", 1000
+      { isExcluded: false }, "-confidenceScore", 1000
     );
-
-    const tierOrder = { VERIFIED: 3, PROBABLE: 2, UNVERIFIED: 1 };
-    const minTier = kbTierFilter === "VERIFIED_ONLY" ? 3
-      : kbTierFilter === "PROBABLE_AND_ABOVE" ? 2 : 1;
-
     const prospects = [];
     for (const entity of kbEntities) {
       if (prospects.length >= target) break;
       if (!entity.domain || existingDomains.has(entity.domain)) continue;
       if (entity.isExcluded) continue;
-      const tierVal = tierOrder[entity.kbTier] || 1;
-      if (tierVal < minTier) continue;
+      if ((tierOrder[entity.kbTier] || 1) < minTier) continue;
 
       const entitySectors = entity.industrySectors || [];
       const sectorMatch = sectors.length === 0 || sectors.some(s =>
@@ -250,23 +210,21 @@ async function kbTopUp(base44, campaign, tenant, existingDomains, target, kbTier
   } catch (_) { return []; }
 }
 
-// ─── MODE 1: KB_ONLY ──────────────────────────────────────────────────────────
+// ─── MODE 1 : KB_ONLY ─────────────────────────────────────────────────────────
 async function runKbOnly(base44, campaign, tenant, existingDomains, target) {
   const kbTierFilter = campaign.kbTierFilter || "ALL";
-  const results = await kbTopUp(base44, campaign, tenant, existingDomains, target, kbTierFilter);
-
-  const suggestWebEnrich = results.length < target;
+  const prospects = await kbTopUp(base44, campaign, tenant, existingDomains, target, kbTierFilter);
+  const suggestWebEnrich = prospects.length < target;
   return {
-    prospects: results,
-    braveRequestCount: 0,
+    prospects,
     suggestWebEnrich,
-    message: suggestWebEnrich
-      ? `Seulement ${results.length}/${target} prospects trouvés dans la base de connaissances. Passez en mode "Recherche web enrichie" pour compléter.`
+    userMessage: suggestWebEnrich
+      ? `Seulement ${prospects.length}/${target} prospects trouvés dans la base de connaissances. Passez en mode "Recherche web enrichie" pour compléter.`
       : null,
   };
 }
 
-// ─── MODE 2: WEB_ENRICHED ─────────────────────────────────────────────────────
+// ─── MODE 2 : WEB_ENRICHED ───────────────────────────────────────────────────
 async function runWebEnriched(base44, campaign, tenant, existingDomains, excludedDomains, target, appSettings) {
   const BRAVE_KEY = Deno.env.get("BRAVE_API_KEY");
   if (!BRAVE_KEY) throw new Error("BRAVE_API_KEY manquante — configurez la clé dans les secrets.");
@@ -296,7 +254,6 @@ async function runWebEnriched(base44, campaign, tenant, existingDomains, exclude
       allProspects.push(prospect);
     }
 
-    // Mise à jour de progression intermédiaire
     await base44.asServiceRole.entities.Campaign.update(campaign.id, {
       progressPct: Math.min(80, Math.round((allProspects.length / target) * 80)),
     });
@@ -316,12 +273,11 @@ async function runWebEnriched(base44, campaign, tenant, existingDomains, exclude
   return { prospects: allProspects, braveRequestCount, geographies, queries };
 }
 
-// ─── MODE 3: AGENT ────────────────────────────────────────────────────────────
+// ─── MODE 3 : AGENT ───────────────────────────────────────────────────────────
 async function runAgentMode(base44, campaign, tenant, user) {
   const geographies = resolveGeographies(tenant, campaign);
   const sectors = campaign?.industrySectors || [];
 
-  // Construire un brief structuré
   const brief = campaign.agentBrief || [
     `Mission de prospection automatisée.`,
     `Cible : ${campaign.targetCount || 50} entreprises.`,
@@ -346,7 +302,6 @@ async function runAgentMode(base44, campaign, tenant, user) {
     sourceMode: "AGENT",
   };
 
-  // Créer la mission agent en base
   const mission = await base44.asServiceRole.entities.AgentMission.create({
     campaignId: campaign.id,
     tenantId: tenant.tenantId,
@@ -383,11 +338,9 @@ Deno.serve(async (req) => {
     } catch (_) {}
 
     // Déterminer le sourceMode (rétrocompatibilité kbOnlyMode)
-    let sourceMode = campaign.sourceMode || (campaign.kbOnlyMode ? "KB_ONLY" : "WEB_ENRICHED");
+    const sourceMode = campaign.sourceMode || (campaign.kbOnlyMode ? "KB_ONLY" : "WEB_ENRICHED");
 
-    const fitThreshold = campaign.eventFitMinScore || tenant.fitThresholdDefault || 0;
-
-    // Marquer RUNNING
+    // Marquer RUNNING (pour tous les modes sauf AGENT qui sera WAITING_AGENT)
     await base44.asServiceRole.entities.Campaign.update(campaignId, {
       status: "RUNNING",
       progressPct: 5,
@@ -399,14 +352,15 @@ Deno.serve(async (req) => {
     const target = campaign.targetCount || 50;
     const geographies = resolveGeographies(tenant, campaign);
 
-    // ── MODE AGENT ──────────────────────────────────────────────────────────────
+    // ── MODE AGENT ────────────────────────────────────────────────────────────
     if (sourceMode === "AGENT") {
       const { missionId, brief } = await runAgentMode(base44, campaign, tenant, user);
 
+      // WAITING_AGENT — pas COMPLETED, aucun prospect n'a encore été ajouté
       await base44.asServiceRole.entities.Campaign.update(campaignId, {
-        status: "COMPLETED",
-        progressPct: 100,
-        countProspects: 0,
+        status: "WAITING_AGENT",
+        progressPct: 0,
+        agentMissionId: missionId,
         toolUsage: { sourceMode: "AGENT", missionId },
         lastRunDebugSummary: `sourceMode=AGENT missionId=${missionId} tenant=${tenant.tenantId}`,
         errorMessage: null,
@@ -416,11 +370,11 @@ Deno.serve(async (req) => {
         sourceMode: "AGENT",
         missionId,
         brief,
-        message: "Mission agent créée. Elle sera exécutée par un Superagent.",
+        message: "Mission agent créée. La campagne passera en COMPLETED une fois le Superagent terminé.",
       });
     }
 
-    // Charger exclusions et domaines existants
+    // Charger exclusions et domaines existants (modes KB_ONLY et WEB_ENRICHED)
     const excludedDomains = await loadExcludedDomains(base44, tenant.tenantId, campaignId);
     const existingProspects = await base44.asServiceRole.entities.Prospect.filter(
       { campaignId }, "-created_date", 500
@@ -433,15 +387,14 @@ Deno.serve(async (req) => {
     let userMessage = null;
     let suggestWebEnrich = false;
 
-    // ── MODE KB_ONLY ────────────────────────────────────────────────────────────
+    // ── MODE KB_ONLY ──────────────────────────────────────────────────────────
     if (sourceMode === "KB_ONLY") {
       const result = await runKbOnly(base44, campaign, tenant, existingDomains, target);
       allProspects = result.prospects;
-      braveRequestCount = 0;
       suggestWebEnrich = result.suggestWebEnrich;
-      userMessage = result.message;
+      userMessage = result.userMessage;
 
-    // ── MODE WEB_ENRICHED ───────────────────────────────────────────────────────
+    // ── MODE WEB_ENRICHED ─────────────────────────────────────────────────────
     } else {
       const result = await runWebEnriched(
         base44, campaign, tenant, existingDomains, excludedDomains, target, appSettings
@@ -458,6 +411,7 @@ Deno.serve(async (req) => {
     }
 
     // Filtre seuil
+    const fitThreshold = campaign.eventFitMinScore || tenant.fitThresholdDefault || 0;
     const finalProspects = fitThreshold > 0
       ? allProspects.filter(p => p.relevanceScore >= fitThreshold)
       : allProspects;
@@ -473,14 +427,12 @@ Deno.serve(async (req) => {
 
     // Statut final
     let finalStatus;
-    if (sourceMode === "KB_ONLY" && insertedCount === 0) {
-      finalStatus = "DONE_PARTIAL";
-    } else if (insertedCount >= target) {
+    if (insertedCount >= target) {
       finalStatus = "COMPLETED";
     } else if (insertedCount > 0) {
       finalStatus = "DONE_PARTIAL";
     } else {
-      finalStatus = "COMPLETED";
+      finalStatus = sourceMode === "KB_ONLY" ? "DONE_PARTIAL" : "COMPLETED";
     }
 
     // Message si résultats insuffisants en WEB_ENRICHED
@@ -503,7 +455,7 @@ Deno.serve(async (req) => {
         suggestedNextStep: suggestWebEnrich ? "SWITCH_TO_WEB_ENRICHED" : insertedCount < target ? "RELAX_FILTERS" : null,
         userMessage,
       },
-      lastRunDebugSummary: `sourceMode=${sourceMode} tenant=${tenant.tenantId} geo=${geographies[0]} queries=${queries.length} brave=${braveRequestCount} inserted=${insertedCount}/${target} scoring=${tenant.scoringMode || "RULES"}`,
+      lastRunDebugSummary: `sourceMode=${sourceMode} tenant=${tenant.tenantId} geo=${geographies[0]} queries=${queries.length} brave=${braveRequestCount} inserted=${insertedCount}/${target}`,
     });
 
     return Response.json({
