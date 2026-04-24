@@ -22,16 +22,6 @@
       ],
       "default": "DRAFT"
     },
-    "prospectSource": {
-      "type": "string",
-      "enum": [
-        "KB_ONLY",
-        "WEB_ENRICHED",
-        "AUTONOMOUS_AGENT"
-      ],
-      "default": "WEB_ENRICHED",
-      "description": "Source des prospects: base KB uniquement, recherche web enrichie, ou agent autonome"
-    },
     "targetCount": {
       "type": "number",
       "default": 50
@@ -66,7 +56,7 @@
     "kbOnlyMode": {
       "type": "boolean",
       "default": false,
-      "description": "Si true, la recherche utilise uniquement la KB sans recherche web (r\u00e9trocompatibilit\u00e9 \u2014 pr\u00e9f\u00e9rer prospectSource)"
+      "description": "Si true, la recherche utilise uniquement la KB sans recherche web"
     },
     "keywords": {
       "type": "array",
@@ -95,7 +85,7 @@
     "eventFitMinScore": {
       "type": "number",
       "default": 0,
-      "description": "Score minimum de fit \u00e9v\u00e9nementiel requis (0 = aucun filtre)"
+      "description": "Score minimum de fit \u00e9v\u00e9nementiel SYNC requis (0 = aucun filtre)"
     },
     "queryPlan": {
       "type": "object"
@@ -159,7 +149,7 @@
     "analysisDoneCount": {
       "type": "number",
       "default": 0,
-      "description": "Nombre de prospects trait\u00e9s dans le batch en cours"
+      "description": "Nombre de prospects trait\u00e9s (analys\u00e9s ou \u00e9chou\u00e9s) dans le batch en cours"
     },
     "analysisTargetCount": {
       "type": "number",
