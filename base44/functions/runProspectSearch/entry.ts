@@ -1,479 +1,98 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
-// ─── Résolution du tenant ─────────────────────────────────────────────────────
-async function resolveTenant(base44, payload, campaign) {
-  const tenantId = payload.tenantId || campaign?.tenantId || "sync-default";
-  try {
-    const results = await base44.asServiceRole.entities.TenantSettings.filter(
-      { tenantId, isActive: true }, "-created_date", 1
-    );
-    if (results?.length > 0) return results[0];
-  } catch (_) {}
-  try {
-    const fallback = await base44.asServiceRole.entities.TenantSettings.filter(
-      { settingsId: "global" }, "-created_date", 1
-    );
-    if (fallback?.length > 0) return fallback[0];
-  } catch (_) {}
-  return {
-    tenantId: "sync-default",
-    companyName: "Prospect",
-    defaultCity: "Montréal",
-    defaultCountry: "CA",
-    targetGeographies: ["Montréal, QC"],
-    searchKeywords: [],
-    excludedKeywords: [],
-    scoringMode: "RULES",
-    scoringWeights: null,
-    fitThresholdDefault: null,
-    industryProfile: "",
-  };
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// runProspectSearch — orchestrateur Campaign
+//
+// Délègue toute la logique de recherche à prospectSearchEngine.
+// Ne gère ici que les transitions de statut Campaign.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ─── Résolution des géographies ───────────────────────────────────────────────
-function resolveGeographies(tenant, campaign) {
-  if (campaign?.locationQuery) return [campaign.locationQuery];
-  if (tenant.targetGeographies?.length > 0) return tenant.targetGeographies;
-  if (tenant.defaultCity) return [`${tenant.defaultCity}, ${tenant.defaultCountry || "CA"}`];
-  return ["Canada"];
-}
-
-// ─── Construction des requêtes ────────────────────────────────────────────────
-function buildSearchQueries(tenant, campaign, geographies) {
-  const queries = [];
-  const baseKeywords = [
-    ...(campaign?.keywords || []),
-    ...(tenant.searchKeywords || []),
-  ];
-  const sectors = campaign?.industrySectors || [];
-  const excluded = [
-    ...(tenant.excludedKeywords || []),
-    ...(campaign?.extraExcludedDomains || []),
-  ];
-  const exclusionStr = excluded.length > 0 ? ` -${excluded.slice(0, 3).join(" -")}` : "";
-
-  for (const geo of geographies.slice(0, 3)) {
-    if (sectors.length > 0) {
-      for (const sector of sectors.slice(0, 4)) {
-        if (baseKeywords.length > 0) {
-          queries.push(`${sector} ${baseKeywords.slice(0, 2).join(" ")} ${geo}${exclusionStr}`);
-        } else {
-          queries.push(`${sector} entreprises ${geo}${exclusionStr}`);
-        }
-      }
-    } else if (baseKeywords.length > 0) {
-      queries.push(`${baseKeywords.slice(0, 3).join(" ")} ${geo}${exclusionStr}`);
-    } else {
-      const profileHint = tenant.industryProfile
-        ? tenant.industryProfile.split(" ").slice(0, 4).join(" ")
-        : "entreprises";
-      queries.push(`${profileHint} ${geo}`);
-    }
-  }
-  return queries.slice(0, 10);
-}
-
-// ─── Scoring ──────────────────────────────────────────────────────────────────
-function scoreProspect(prospect, tenant, campaign) {
-  if ((tenant.scoringMode || "RULES") === "AI") return 50;
-  const weights = tenant.scoringWeights || {};
-  let score = 0;
-  const wGeo = weights.geo ?? 30;
-  const wSector = weights.sector ?? 25;
-  const wKeyword = weights.keyword ?? 20;
-  const wDomain = weights.domain ?? 15;
-  const wEventFit = weights.eventFit ?? 10;
-
-  const sectors = campaign?.industrySectors || [];
-  const keywords = [...(campaign?.keywords || []), ...(tenant.searchKeywords || [])];
-  const geographies = resolveGeographies(tenant, campaign);
-
-  const locationStr = JSON.stringify(prospect.location || {}).toLowerCase();
-  if (geographies.some(g => locationStr.includes(g.toLowerCase().split(",")[0].trim()))) score += wGeo;
-
-  const prospectSectors = (prospect.industrySectors || []).map(s => s.toLowerCase());
-  if (sectors.some(s => prospectSectors.includes(s.toLowerCase()))) score += wSector;
-
-  const companyStr = `${prospect.companyName || ""} ${prospect.serpSnippet || ""}`.toLowerCase();
-  if (keywords.some(k => companyStr.includes(k.toLowerCase()))) score += wKeyword;
-
-  if (prospect.domain && !prospect.domain.includes("linkedin") && !prospect.domain.includes("facebook")) {
-    score += wDomain;
-  }
-  score += Math.round(((prospect.eventFitScore || 0) / 100) * wEventFit);
-  return Math.min(100, Math.max(0, score));
-}
-
-// ─── Brave Search ─────────────────────────────────────────────────────────────
-async function searchBrave(query, apiKey, maxResults = 5) {
-  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}&country=CA`;
-  const res = await fetch(url, {
-    headers: {
-      "Accept": "application/json",
-      "Accept-Encoding": "gzip",
-      "X-Subscription-Token": apiKey,
-    },
-  });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.web?.results || [];
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function extractDomain(url) {
-  try {
-    const u = new URL(url.startsWith("http") ? url : `https://${url}`);
-    return u.hostname.replace(/^www\./, "");
-  } catch (_) { return ""; }
-}
-
-function normalizeProspect(result, campaignId, tenantId) {
-  const domain = extractDomain(result.url || "");
-  return {
-    campaignId,
-    tenantId: tenantId || "sync-default",
-    companyName: result.title?.split(" - ")[0]?.split(" | ")[0]?.trim() || result.title || domain,
-    website: result.url || `https://${domain}`,
-    domain,
-    serpSnippet: result.description || "",
-    sourceUrl: result.url || "",
-    status: "NOUVEAU",
-    sourceOrigin: "WEB",
-    location: {},
-    relevanceScore: 0,
-  };
-}
-
-function deduplicateByDomain(prospects) {
-  const seen = new Set();
-  return prospects.filter(p => {
-    if (!p.domain || seen.has(p.domain)) return false;
-    seen.add(p.domain);
-    return true;
-  });
-}
-
-async function loadExcludedDomains(base44, tenantId, campaignId) {
-  const excluded = new Set();
-  try {
-    const global = await base44.asServiceRole.entities.ExclusionEntry.filter(
-      { exclusionType: "GLOBAL", isActive: true }, "-created_date", 500
-    );
-    for (const e of global) { if (e.domain) excluded.add(e.domain.toLowerCase()); }
-    const camp = await base44.asServiceRole.entities.ExclusionEntry.filter(
-      { campaignId, isActive: true }, "-created_date", 200
-    );
-    for (const e of camp) { if (e.domain) excluded.add(e.domain.toLowerCase()); }
-  } catch (_) {}
-  return excluded;
-}
-
-// ─── KB top-up ────────────────────────────────────────────────────────────────
-async function kbTopUp(base44, campaign, tenant, existingDomains, target, kbTierFilter) {
-  const sectors = campaign?.industrySectors || [];
-  const tierOrder = { VERIFIED: 3, PROBABLE: 2, UNVERIFIED: 1 };
-  const minTier = kbTierFilter === "VERIFIED_ONLY" ? 3 : kbTierFilter === "PROBABLE_AND_ABOVE" ? 2 : 1;
-
-  try {
-    const kbEntities = await base44.asServiceRole.entities.KBEntityV3.filter(
-      { isExcluded: false }, "-confidenceScore", 1000
-    );
-    const prospects = [];
-    for (const entity of kbEntities) {
-      if (prospects.length >= target) break;
-      if (!entity.domain || existingDomains.has(entity.domain)) continue;
-      if (entity.isExcluded) continue;
-      if ((tierOrder[entity.kbTier] || 1) < minTier) continue;
-
-      const entitySectors = entity.industrySectors || [];
-      const sectorMatch = sectors.length === 0 || sectors.some(s =>
-        entitySectors.some(es => es.toLowerCase().includes(s.toLowerCase()))
-      );
-      if (!sectorMatch) continue;
-
-      prospects.push({
-        campaignId: campaign.id,
-        tenantId: tenant.tenantId || "sync-default",
-        companyName: entity.name,
-        website: entity.website || `https://${entity.domain}`,
-        domain: entity.domain,
-        status: "NOUVEAU",
-        sourceOrigin: "KB_TOPUP",
-        kbEntityId: entity.id,
-        kbTier: entity.kbTier || "VERIFIED",
-        industrySectors: entity.industrySectors || [],
-        location: { city: entity.hqCity, province: entity.hqProvince, country: entity.hqCountry },
-        relevanceScore: 0,
-      });
-    }
-    return prospects;
-  } catch (_) { return []; }
-}
-
-// ─── MODE 1 : KB_ONLY ─────────────────────────────────────────────────────────
-async function runKbOnly(base44, campaign, tenant, existingDomains, target) {
-  const kbTierFilter = campaign.kbTierFilter || "ALL";
-  const prospects = await kbTopUp(base44, campaign, tenant, existingDomains, target, kbTierFilter);
-  const suggestWebEnrich = prospects.length < target;
-  return {
-    prospects,
-    suggestWebEnrich,
-    userMessage: suggestWebEnrich
-      ? `Seulement ${prospects.length}/${target} prospects trouvés dans la base de connaissances. Passez en mode "Recherche web enrichie" pour compléter.`
-      : null,
-  };
-}
-
-// ─── MODE 2 : WEB_ENRICHED ───────────────────────────────────────────────────
-async function runWebEnriched(base44, campaign, tenant, existingDomains, excludedDomains, target, appSettings) {
-  const BRAVE_KEY = Deno.env.get("BRAVE_API_KEY");
-  if (!BRAVE_KEY) throw new Error("BRAVE_API_KEY manquante — configurez la clé dans les secrets.");
-
-  const geographies = resolveGeographies(tenant, campaign);
-  const queries = buildSearchQueries(tenant, campaign, geographies);
-  const maxBraveRequests = appSettings.braveMaxRequestsPerCampaign || 200;
-  let braveRequestCount = 0;
-  let allProspects = [];
-
-  for (const query of queries) {
-    if (allProspects.length >= target) break;
-    if (braveRequestCount >= maxBraveRequests) break;
-
-    const results = await searchBrave(query, BRAVE_KEY, appSettings.braveMaxPagesPerQuery || 5);
-    braveRequestCount++;
-
-    for (const result of results) {
-      if (allProspects.length >= target * 1.5) break;
-      const prospect = normalizeProspect(result, campaign.id, tenant.tenantId);
-      if (!prospect.domain) continue;
-      if (excludedDomains.has(prospect.domain)) continue;
-      if (existingDomains.has(prospect.domain)) continue;
-      const excludedKws = tenant.excludedKeywords || [];
-      const snippetLower = (prospect.serpSnippet + " " + prospect.companyName).toLowerCase();
-      if (excludedKws.some(kw => snippetLower.includes(kw.toLowerCase()))) continue;
-      allProspects.push(prospect);
-    }
-
-    await base44.asServiceRole.entities.Campaign.update(campaign.id, {
-      progressPct: Math.min(80, Math.round((allProspects.length / target) * 80)),
-    });
-  }
-
-  // KB top-up si manque
-  if (allProspects.length < target && appSettings.enableKbTopUp !== false) {
-    const kbNeeded = target - allProspects.length;
-    const allDomainsSoFar = new Set([
-      ...Array.from(existingDomains),
-      ...allProspects.map(p => p.domain).filter(Boolean),
-    ]);
-    const kbResults = await kbTopUp(base44, campaign, tenant, allDomainsSoFar, kbNeeded, "ALL");
-    allProspects = [...allProspects, ...kbResults];
-  }
-
-  return { prospects: allProspects, braveRequestCount, geographies, queries };
-}
-
-// ─── MODE 3 : AGENT ───────────────────────────────────────────────────────────
-async function runAgentMode(base44, campaign, tenant, user) {
-  const geographies = resolveGeographies(tenant, campaign);
-  const sectors = campaign?.industrySectors || [];
-
-  const brief = campaign.agentBrief || [
-    `Mission de prospection automatisée.`,
-    `Cible : ${campaign.targetCount || 50} entreprises.`,
-    `Zone géographique : ${geographies.join(", ")}.`,
-    sectors.length > 0 ? `Secteurs : ${sectors.join(", ")}.` : "",
-    campaign.keywords?.length > 0 ? `Mots-clés : ${campaign.keywords.join(", ")}.` : "",
-    campaign.companySize && campaign.companySize !== "ALL" ? `Taille d'entreprise : ${campaign.companySize}.` : "",
-    `Scoring et qualification requis. Générer les messages d'approche.`,
-  ].filter(Boolean).join(" ");
-
-  const missionParams = {
-    campaignId: campaign.id,
-    campaignName: campaign.name,
-    targetCount: campaign.targetCount || 50,
-    geographies,
-    industrySectors: sectors,
-    keywords: campaign.keywords || [],
-    companySize: campaign.companySize || "ALL",
-    locationQuery: campaign.locationQuery,
-    tenantId: tenant.tenantId,
-    scoringMode: tenant.scoringMode || "RULES",
-    sourceMode: "AGENT",
-  };
-
-  const mission = await base44.asServiceRole.entities.AgentMission.create({
-    campaignId: campaign.id,
-    tenantId: tenant.tenantId,
-    ownerUserId: user.email,
-    status: "PENDING",
-    brief,
-    missionParams,
-  });
-
-  return { missionId: mission.id, brief };
-}
-
-// ─── Main handler ─────────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
+  let base44;
+  let campaignId;
+
   try {
-    const base44 = createClientFromRequest(req);
+    base44 = createClientFromRequest(req);
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
     const payload = await req.json();
-    const { campaignId } = payload;
+    campaignId = payload.campaignId;
     if (!campaignId) return Response.json({ error: "campaignId requis" }, { status: 400 });
 
+    // Charger la campagne
     const campaigns = await base44.asServiceRole.entities.Campaign.filter({ id: campaignId }, "-created_date", 1);
     if (!campaigns?.length) return Response.json({ error: "Campagne introuvable" }, { status: 404 });
     const campaign = campaigns[0];
 
-    const tenant = await resolveTenant(base44, payload, campaign);
+    // Résoudre le mode source
+    const mode = campaign.sourceMode || (campaign.kbOnlyMode ? "KB_ONLY" : "WEB_ENRICHED");
 
-    let appSettings = {};
-    try {
-      const s = await base44.asServiceRole.entities.AppSettings.filter({ settingsId: "global" }, "-created_date", 1);
-      if (s?.length) appSettings = s[0];
-    } catch (_) {}
+    // Si mode AGENT → créer la mission et passer en WAITING_AGENT
+    if (mode === "AGENT") {
+      const missionData = {
+        campaignId,
+        tenantId: campaign.tenantId || "sync-default",
+        ownerUserId: campaign.ownerUserId,
+        status: "PENDING",
+        brief: campaign.agentBrief || `Campagne : ${campaign.name}`,
+        missionParams: {
+          locationQuery: campaign.locationQuery,
+          industrySectors: campaign.industrySectors,
+          companySize: campaign.companySize,
+          keywords: campaign.keywords,
+          targetCount: campaign.targetCount,
+        },
+      };
+      const mission = await base44.asServiceRole.entities.AgentMission.create(missionData);
+      await base44.asServiceRole.entities.Campaign.update(campaignId, {
+        status: "WAITING_AGENT",
+        agentMissionId: mission.id,
+        lastRunAt: new Date().toISOString(),
+        errorMessage: null,
+      });
+      return Response.json({ status: "WAITING_AGENT", agentMissionId: mission.id });
+    }
 
-    // Déterminer le sourceMode (rétrocompatibilité kbOnlyMode)
-    const sourceMode = campaign.sourceMode || (campaign.kbOnlyMode ? "KB_ONLY" : "WEB_ENRICHED");
-
-    // Marquer RUNNING (pour tous les modes sauf AGENT qui sera WAITING_AGENT)
+    // Passer en RUNNING
     await base44.asServiceRole.entities.Campaign.update(campaignId, {
       status: "RUNNING",
       progressPct: 5,
       lastRunAt: new Date().toISOString(),
       errorMessage: null,
-      sourceMode,
     });
 
+    // Appeler le moteur commun via SDK (invocation interne)
+    const engineRes = await base44.asServiceRole.functions.invoke("prospectSearchEngine", {
+      campaignId,
+      mode,
+    });
+
+    const r = engineRes?.data || engineRes || {};
+    const prospectsCreated = r.prospectsCreated ?? 0;
     const target = campaign.targetCount || 50;
-    const geographies = resolveGeographies(tenant, campaign);
-
-    // ── MODE AGENT ────────────────────────────────────────────────────────────
-    if (sourceMode === "AGENT") {
-      const { missionId, brief } = await runAgentMode(base44, campaign, tenant, user);
-
-      // WAITING_AGENT — pas COMPLETED, aucun prospect n'a encore été ajouté
-      await base44.asServiceRole.entities.Campaign.update(campaignId, {
-        status: "WAITING_AGENT",
-        progressPct: 0,
-        agentMissionId: missionId,
-        toolUsage: { sourceMode: "AGENT", missionId },
-        lastRunDebugSummary: `sourceMode=AGENT missionId=${missionId} tenant=${tenant.tenantId}`,
-        errorMessage: null,
-      });
-
-      return Response.json({
-        sourceMode: "AGENT",
-        missionId,
-        brief,
-        message: "Mission agent créée. La campagne passera en COMPLETED une fois le Superagent terminé.",
-      });
-    }
-
-    // Charger exclusions et domaines existants (modes KB_ONLY et WEB_ENRICHED)
-    const excludedDomains = await loadExcludedDomains(base44, tenant.tenantId, campaignId);
-    const existingProspects = await base44.asServiceRole.entities.Prospect.filter(
-      { campaignId }, "-created_date", 500
-    );
-    const existingDomains = new Set(existingProspects.map(p => p.domain).filter(Boolean));
-
-    let allProspects = [];
-    let braveRequestCount = 0;
-    let queries = [];
-    let userMessage = null;
-    let suggestWebEnrich = false;
-
-    // ── MODE KB_ONLY ──────────────────────────────────────────────────────────
-    if (sourceMode === "KB_ONLY") {
-      const result = await runKbOnly(base44, campaign, tenant, existingDomains, target);
-      allProspects = result.prospects;
-      suggestWebEnrich = result.suggestWebEnrich;
-      userMessage = result.userMessage;
-
-    // ── MODE WEB_ENRICHED ─────────────────────────────────────────────────────
-    } else {
-      const result = await runWebEnriched(
-        base44, campaign, tenant, existingDomains, excludedDomains, target, appSettings
-      );
-      allProspects = result.prospects;
-      braveRequestCount = result.braveRequestCount;
-      queries = result.queries || [];
-    }
-
-    // Déduplication + scoring
-    allProspects = deduplicateByDomain(allProspects).slice(0, target);
-    for (const p of allProspects) {
-      p.relevanceScore = scoreProspect(p, tenant, campaign);
-    }
-
-    // Filtre seuil
-    const fitThreshold = campaign.eventFitMinScore || tenant.fitThresholdDefault || 0;
-    const finalProspects = fitThreshold > 0
-      ? allProspects.filter(p => p.relevanceScore >= fitThreshold)
-      : allProspects;
-
-    // Insertion
-    let insertedCount = 0;
-    for (const prospect of finalProspects) {
-      try {
-        await base44.asServiceRole.entities.Prospect.create(prospect);
-        insertedCount++;
-      } catch (_) {}
-    }
-
-    // Statut final
-    let finalStatus;
-    if (insertedCount >= target) {
-      finalStatus = "COMPLETED";
-    } else if (insertedCount > 0) {
-      finalStatus = "DONE_PARTIAL";
-    } else {
-      finalStatus = sourceMode === "KB_ONLY" ? "DONE_PARTIAL" : "COMPLETED";
-    }
-
-    // Message si résultats insuffisants en WEB_ENRICHED
-    if (sourceMode === "WEB_ENRICHED" && insertedCount < target) {
-      userMessage = `${insertedCount}/${target} prospects trouvés. Essayez d'élargir la zone géographique, réduire les secteurs, ou retirer certains mots-clés.`;
-    }
+    const finalStatus = prospectsCreated >= target ? "COMPLETED"
+      : prospectsCreated > 0 ? "DONE_PARTIAL"
+      : "COMPLETED";
 
     await base44.asServiceRole.entities.Campaign.update(campaignId, {
       status: finalStatus,
       progressPct: 100,
-      countProspects: (existingProspects.length || 0) + insertedCount,
-      toolUsage: {
-        sourceMode,
-        suggestWebEnrich,
-        braveRequests: braveRequestCount,
-        prospectsInserted: insertedCount,
-        geographies,
-        tenantId: tenant.tenantId,
-        scoringMode: tenant.scoringMode || "RULES",
-        suggestedNextStep: suggestWebEnrich ? "SWITCH_TO_WEB_ENRICHED" : insertedCount < target ? "RELAX_FILTERS" : null,
-        userMessage,
-      },
-      lastRunDebugSummary: `sourceMode=${sourceMode} tenant=${tenant.tenantId} geo=${geographies[0]} queries=${queries.length} brave=${braveRequestCount} inserted=${insertedCount}/${target}`,
+      countProspects: (r.existingCount || 0) + prospectsCreated,
+      toolUsage: r.toolUsage || {},
+      lastRunDebugSummary: r.debugSummary || "",
     });
 
     return Response.json({
-      sourceMode,
-      inserted: insertedCount,
-      total: finalProspects.length,
-      geographies,
-      tenantId: tenant.tenantId,
-      queries: queries.length,
-      message: userMessage,
+      inserted: prospectsCreated,
+      total: r.prospectsFound ?? prospectsCreated,
+      status: finalStatus,
     });
 
   } catch (error) {
     try {
-      const base44 = createClientFromRequest(req);
-      const payload = await req.clone().json().catch(() => ({}));
-      if (payload.campaignId) {
-        await base44.asServiceRole.entities.Campaign.update(payload.campaignId, {
+      if (campaignId && base44) {
+        await base44.asServiceRole.entities.Campaign.update(campaignId, {
           status: "FAILED",
           errorMessage: error.message,
         });
