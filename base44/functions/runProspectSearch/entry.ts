@@ -2,9 +2,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // runProspectSearch — orchestrateur Campaign
-//
 // Délègue toute la logique de recherche à prospectSearchEngine.
-// Ne gère ici que les transitions de statut Campaign.
 // ─────────────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -20,15 +18,13 @@ Deno.serve(async (req) => {
     campaignId = payload.campaignId;
     if (!campaignId) return Response.json({ error: "campaignId requis" }, { status: 400 });
 
-    // Charger la campagne
     const campaigns = await base44.asServiceRole.entities.Campaign.filter({ id: campaignId }, "-created_date", 1);
     if (!campaigns?.length) return Response.json({ error: "Campagne introuvable" }, { status: 404 });
     const campaign = campaigns[0];
 
-    // Résoudre le mode source
     const mode = campaign.sourceMode || (campaign.kbOnlyMode ? "KB_ONLY" : "WEB_ENRICHED");
 
-    // Si mode AGENT → créer la mission et passer en WAITING_AGENT
+    // Mode AGENT → créer la mission et passer en WAITING_AGENT
     if (mode === "AGENT") {
       const missionData = {
         campaignId,
@@ -62,7 +58,7 @@ Deno.serve(async (req) => {
       errorMessage: null,
     });
 
-    // Appeler le moteur commun via SDK (invocation interne)
+    // Appeler le moteur commun
     const engineRes = await base44.asServiceRole.functions.invoke("prospectSearchEngine", {
       campaignId,
       mode,
@@ -75,11 +71,16 @@ Deno.serve(async (req) => {
       : prospectsCreated > 0 ? "DONE_PARTIAL"
       : "COMPLETED";
 
+    const debugInfo = r.debugInfo || null;
+
     await base44.asServiceRole.entities.Campaign.update(campaignId, {
       status: finalStatus,
       progressPct: 100,
       countProspects: (r.existingCount || 0) + prospectsCreated,
-      toolUsage: r.toolUsage || {},
+      toolUsage: {
+        ...(r.toolUsage || {}),
+        debugInfo,
+      },
       lastRunDebugSummary: r.debugSummary || "",
     });
 
@@ -87,6 +88,7 @@ Deno.serve(async (req) => {
       inserted: prospectsCreated,
       total: r.prospectsFound ?? prospectsCreated,
       status: finalStatus,
+      debugInfo,
     });
 
   } catch (error) {

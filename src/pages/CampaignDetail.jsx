@@ -3,6 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { ArrowLeft, Brain, ExternalLink, Building2, MapPin, ChevronRight, RefreshCw, Clock, Trash2, AlertCircle, Bot } from "lucide-react";
+import DebugSummaryPanel from "@/components/shared/DebugSummaryPanel";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/shared/StatusBadge";
 import {
@@ -415,16 +416,13 @@ export default function CampaignDetail() {
         ))}
       </div>
 
-      {/* Admin debug summary — only visible to admins */}
-      {campaign?.lastRunDebugSummary && user?.role === "admin" && (
-        <details className="mb-3 cursor-pointer">
-          <summary className="px-3 py-1.5 bg-slate-800 text-slate-400 rounded-lg text-xs font-mono select-none hover:text-slate-200">
-            [debug] {campaign.toolUsage?.rateLimitHitCount > 0 && <span className="text-yellow-400 ml-2">⚠ {campaign.toolUsage.rateLimitHitCount} rate-limit hits</span>}
-          </summary>
-          <div className="mt-1 px-3 py-2 bg-slate-900 text-slate-300 rounded-lg text-xs font-mono break-all">
-            {campaign.lastRunDebugSummary}
-          </div>
-        </details>
+      {/* Debug panel — admin only */}
+      {user?.role === "admin" && (campaign?.toolUsage?.debugInfo || campaign?.lastRunDebugSummary) && (
+        <DebugSummaryPanel
+          debugInfo={campaign.toolUsage?.debugInfo}
+          rawText={campaign.lastRunDebugSummary}
+          className="mb-3"
+        />
       )}
 
       {/* Tabs */}

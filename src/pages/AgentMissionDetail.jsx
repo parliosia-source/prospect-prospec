@@ -6,6 +6,7 @@ import {
   ArrowLeft, Bot, Clock, CheckCircle2, AlertCircle, Loader2, Circle,
   ExternalLink, RefreshCw, ChevronRight, MapPin, Building2, Target
 } from "lucide-react";
+import DebugSummaryPanel from "@/components/shared/DebugSummaryPanel";
 import { Button } from "@/components/ui/button";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -270,35 +271,44 @@ export default function AgentMissionDetail() {
       {/* Résumé d'exécution */}
       {mission.resultSummary && (() => {
         let parsed = null;
-        try { parsed = JSON.parse(mission.resultSummary); } catch (_) { /* raw string */ }
+        try { parsed = JSON.parse(mission.resultSummary); } catch (_) {}
+        const kpis = parsed ? [
+          { label: "Prospects demandés", value: parsed.prospectsRequested, color: "text-slate-700" },
+          { label: "Prospects trouvés", value: parsed.prospectsFound, color: "text-blue-700" },
+          { label: "Prospects créés", value: parsed.prospectsCreated, color: "text-green-700" },
+          { label: "Doublons ignorés", value: parsed.duplicatesSkipped, color: "text-slate-500" },
+          { label: "Requêtes exécutées", value: parsed.queriesExecuted, color: "text-slate-500" },
+          { label: "Appels Brave", value: parsed.braveRequests, color: "text-slate-500" },
+        ] : [];
         return (
-          <div className="bg-white rounded-xl border shadow-sm p-5">
-            <h2 className="font-semibold text-sm text-slate-800 mb-3 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-green-500" /> Résumé d'exécution
-            </h2>
-            {parsed ? (
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                {[
-                  { label: "Prospects demandés", value: parsed.prospectsRequested, color: "text-slate-700" },
-                  { label: "Prospects trouvés", value: parsed.prospectsFound, color: "text-blue-700" },
-                  { label: "Prospects créés", value: parsed.prospectsCreated, color: "text-green-700" },
-                  { label: "Doublons ignorés", value: parsed.duplicatesSkipped, color: "text-slate-500" },
-                  { label: "Requêtes exécutées", value: parsed.queriesExecuted, color: "text-slate-500" },
-                  { label: "Appels Brave", value: parsed.braveRequests, color: "text-slate-500" },
-                ].map(({ label, value, color }) => value !== undefined && (
-                  <div key={label} className="bg-slate-50 rounded-lg px-3 py-2">
-                    <div className="text-xs text-slate-400">{label}</div>
-                    <div className={`text-xl font-bold ${color}`}>{value}</div>
+          <div className="space-y-3">
+            <div className="bg-white rounded-xl border shadow-sm p-5">
+              <h2 className="font-semibold text-sm text-slate-800 mb-3 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-green-500" /> Résumé d'exécution
+              </h2>
+              {parsed ? (
+                <>
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    {kpis.map(({ label, value, color }) => value !== undefined && (
+                      <div key={label} className="bg-slate-50 rounded-lg px-3 py-2">
+                        <div className="text-xs text-slate-400">{label}</div>
+                        <div className={`text-xl font-bold ${color}`}>{value}</div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="bg-green-50 border border-green-100 rounded-lg px-4 py-3 text-sm text-green-900 leading-relaxed whitespace-pre-wrap">
-                {mission.resultSummary}
-              </div>
-            )}
-            {parsed?.sourcesUsed && (
-              <div className="text-xs text-slate-400 mt-1">Sources : {parsed.sourcesUsed.join(", ")}</div>
+                  {parsed?.sourcesUsed && (
+                    <div className="text-xs text-slate-400">Sources : {parsed.sourcesUsed.join(", ")}</div>
+                  )}
+                </>
+              ) : (
+                <div className="bg-green-50 border border-green-100 rounded-lg px-4 py-3 text-sm text-green-900 whitespace-pre-wrap">
+                  {mission.resultSummary}
+                </div>
+              )}
+            </div>
+            {/* Détails techniques (debugInfo) */}
+            {parsed?.debugInfo && (
+              <DebugSummaryPanel debugInfo={parsed.debugInfo} />
             )}
           </div>
         );

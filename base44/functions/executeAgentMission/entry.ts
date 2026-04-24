@@ -2,9 +2,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // executeAgentMission — orchestrateur AgentMission
-//
 // Délègue toute la logique de recherche à prospectSearchEngine.
-// Ne gère ici que les transitions de statut AgentMission + Campaign.
 // ─────────────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -56,7 +54,7 @@ Deno.serve(async (req) => {
       errorMessage: null,
     });
 
-    // Appeler le moteur commun via SDK (invocation interne)
+    // Appeler le moteur commun
     const engineRes = await base44.asServiceRole.functions.invoke("prospectSearchEngine", {
       campaignId: campaign.id,
       mode: "WEB_ENRICHED",
@@ -68,8 +66,9 @@ Deno.serve(async (req) => {
     const duplicatesSkipped = r.duplicatesSkipped ?? 0;
     const target = campaign.targetCount || 50;
     const completedAt = new Date().toISOString();
+    const debugInfo = r.debugInfo || null;
 
-    // Mettre à jour la mission → COMPLETED
+    // Mission → COMPLETED avec debugInfo en resultSummary
     await base44.asServiceRole.entities.AgentMission.update(missionId, {
       status: "COMPLETED",
       completedAt,
@@ -84,10 +83,11 @@ Deno.serve(async (req) => {
         braveRequests: r.braveRequests ?? 0,
         startedAt,
         completedAt,
+        debugInfo,
       }, null, 2),
     });
 
-    // Mettre à jour la campagne → statut final
+    // Campagne → statut final
     const finalStatus = prospectsCreated >= target ? "COMPLETED"
       : prospectsCreated > 0 ? "DONE_PARTIAL"
       : "COMPLETED";
@@ -99,6 +99,7 @@ Deno.serve(async (req) => {
       toolUsage: {
         ...(r.toolUsage || {}),
         agentMissionId: missionId,
+        debugInfo,
       },
       lastRunDebugSummary: r.debugSummary || `agent_mission=${missionId} created=${prospectsCreated}/${target}`,
     });
@@ -110,6 +111,7 @@ Deno.serve(async (req) => {
       prospectsCreated,
       duplicatesSkipped,
       sourcesUsed: r.sourcesUsed || ["Brave Search"],
+      debugInfo,
     });
 
   } catch (error) {

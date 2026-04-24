@@ -9,14 +9,12 @@ async function resolveTenant(base44, tenantId) {
     );
     if (results?.length > 0) return results[0];
   } catch (_) {}
-
   try {
     const fallback = await base44.asServiceRole.entities.TenantSettings.filter(
       { settingsId: "global" }, "-created_date", 1
     );
     if (fallback?.length > 0) return fallback[0];
   } catch (_) {}
-
   return {
     tenantId: "sync-default",
     companyName: "Prospect",
@@ -75,7 +73,6 @@ function buildSearchQueries(tenant, campaign, geographies) {
     }
   }
 
-  // Brief-based query for agent missions
   if (campaign?.agentBrief) {
     const briefWords = campaign.agentBrief.split(" ").slice(0, 6).join(" ");
     const geo = geographies[0] || "Canada";
@@ -186,7 +183,6 @@ async function loadExcludedDomains(base44, campaignId) {
       { exclusionType: "GLOBAL", isActive: true }, "-created_date", 500
     );
     global.forEach(e => { if (e.domain) excluded.add(e.domain.toLowerCase()); });
-
     if (campaignId) {
       const campSpecific = await base44.asServiceRole.entities.ExclusionEntry.filter(
         { campaignId, isActive: true }, "-created_date", 200
@@ -235,22 +231,20 @@ async function kbTopUp(base44, campaign, tenant, existingDomains, target) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN ENGINE
-//
-// Paramètres :
-//   base44            — client SDK initialisé
-//   campaign          — objet Campaign complet
-//   options.mode      — "WEB_ENRICHED" | "KB_ONLY" | "AGENT" (défaut WEB_ENRICHED)
-//   options.onProgress(pct) — callback optionnel appelé pendant la recherche
-//
-// Retourne :
-//   { prospectsFound, prospectsCreated, duplicatesSkipped,
-//     queriesExecuted, braveRequests, sourcesUsed, debugSummary, toolUsage }
 // ─────────────────────────────────────────────────────────────────────────────
 export async function runSearchEngine(base44, campaign, options = {}) {
+  const startMs = Date.now();
   const { mode = "WEB_ENRICHED", onProgress = null } = options;
 
+  const errors = [];
+  const warnings = [];
+
+  // API key check
   const BRAVE_KEY = Deno.env.get("BRAVE_API_KEY");
-  if (!BRAVE_KEY) throw new Error("BRAVE_API_KEY manquante");
+  if (!BRAVE_KEY && mode !== "KB_ONLY") {
+    warnings.push("SOURCE_NOT_CONFIGURED: BRAVE_API_KEY manquante");
+    if (mode !== "KB_ONLY") throw new Error("BRAVE_API_KEY manquante");
+  }
 
   // AppSettings
   let appSettings = {};
@@ -266,7 +260,6 @@ export async function runSearchEngine(base44, campaign, options = {}) {
   const fitThreshold = campaign.eventFitMinScore || tenant.fitThresholdDefault || 0;
   const excludedDomains = await loadExcludedDomains(base44, campaign.id);
 
-  // Domaines déjà présents dans cette campagne (idempotence)
   const existingProspects = await base44.asServiceRole.entities.Prospect.filter(
     { campaignId: campaign.id }, "-created_date", 500
   );
@@ -274,20 +267,25 @@ export async function runSearchEngine(base44, campaign, options = {}) {
 
   let allProspects = [];
   let braveRequests = 0;
+  let rawResultsCount = 0;
+  let excludedCount = 0;
+  let kbTopUpCount = 0;
   const geographies = resolveGeographies(tenant, campaign);
   const queries = buildSearchQueries(tenant, campaign, geographies);
   const sourcesUsed = [];
 
   if (mode === "KB_ONLY") {
-    // ── KB-only mode ──
-    allProspects = await kbTopUp(base44, campaign, tenant, existingDomains, target);
+    const kbResults = await kbTopUp(base44, campaign, tenant, existingDomains, target);
+    kbTopUpCount = kbResults.length;
+    allProspects = kbResults;
     sourcesUsed.push("KBEntityV3");
+    if (kbResults.length > 0) warnings.push("KB_TOPUP_USED: résultats issus uniquement de la base KB");
 
   } else {
-    // ── WEB_ENRICHED / AGENT — Brave search ──
     const maxBraveRequests = appSettings.braveMaxRequestsPerCampaign || 200;
     const resultsPerQuery = appSettings.braveMaxPagesPerQuery || 5;
     const excludedKws = tenant.excludedKeywords || [];
+    let queryNoResultCount = 0;
 
     for (const query of queries) {
       if (allProspects.length >= target * 1.5) break;
@@ -295,14 +293,17 @@ export async function runSearchEngine(base44, campaign, options = {}) {
 
       const results = await searchBrave(query, BRAVE_KEY, resultsPerQuery);
       braveRequests++;
+      rawResultsCount += results.length;
+
+      if (results.length === 0) queryNoResultCount++;
 
       for (const result of results) {
         const p = normalizeProspect(result, campaign.id, tenant.tenantId);
-        if (!p.domain) continue;
-        if (excludedDomains.has(p.domain)) continue;
-        if (existingDomains.has(p.domain)) continue;
+        if (!p.domain) { excludedCount++; continue; }
+        if (excludedDomains.has(p.domain)) { excludedCount++; continue; }
+        if (existingDomains.has(p.domain)) { excludedCount++; continue; }
         const text = `${p.serpSnippet} ${p.companyName}`.toLowerCase();
-        if (excludedKws.some(kw => text.includes(kw.toLowerCase()))) continue;
+        if (excludedKws.some(kw => text.includes(kw.toLowerCase()))) { excludedCount++; continue; }
         allProspects.push(p);
       }
 
@@ -312,7 +313,13 @@ export async function runSearchEngine(base44, campaign, options = {}) {
       }
     }
 
-    if (!sourcesUsed.includes("Brave Search")) sourcesUsed.push("Brave Search");
+    sourcesUsed.push("Brave Search");
+
+    if (queryNoResultCount === queries.length) {
+      warnings.push("NO_RAW_RESULTS: Brave n'a retourné aucun résultat pour toutes les requêtes");
+    } else if (queryNoResultCount > queries.length / 2) {
+      warnings.push(`NO_RAW_RESULTS: ${queryNoResultCount}/${queries.length} requêtes sans résultats`);
+    }
 
     // KB top-up si insuffisant
     if (allProspects.length < target && appSettings.enableKbTopUp !== false) {
@@ -323,36 +330,74 @@ export async function runSearchEngine(base44, campaign, options = {}) {
       ]);
       const kbResults = await kbTopUp(base44, campaign, tenant, allDomainsSoFar, kbNeeded);
       if (kbResults.length > 0) {
+        kbTopUpCount = kbResults.length;
         allProspects = [...allProspects, ...kbResults];
         sourcesUsed.push("KBEntityV3");
+        warnings.push(`KB_TOPUP_USED: ${kbTopUpCount} prospects ajoutés depuis la base KB pour compléter`);
       }
     }
   }
 
-  // ── Dedup + score ──
+  // Dedup
+  const beforeDedup = allProspects.length;
   const deduplicated = deduplicateByDomain(allProspects).slice(0, target);
   const prospectsFound = deduplicated.length;
-  const duplicatesSkipped = allProspects.length - prospectsFound;
+  const duplicateCount = beforeDedup - prospectsFound;
 
+  if (duplicateCount > 0 && beforeDedup > 0 && duplicateCount / beforeDedup > 0.4) {
+    warnings.push(`MANY_DUPLICATES: ${duplicateCount}/${beforeDedup} résultats filtrés comme doublons (${Math.round(duplicateCount / beforeDedup * 100)}%)`);
+  }
+
+  // Score
   for (const p of deduplicated) {
     p.relevanceScore = scoreProspect(p, tenant, campaign);
   }
 
-  // ── Filtre par seuil ──
+  // Filtre par seuil
   const finalProspects = fitThreshold > 0
     ? deduplicated.filter(p => p.relevanceScore >= fitThreshold)
     : deduplicated;
 
-  // ── Insertion idempotente ──
+  const scoredCount = finalProspects.length;
+
+  // Insertion idempotente
   let prospectsCreated = 0;
   for (const prospect of finalProspects) {
     try {
       await base44.asServiceRole.entities.Prospect.create(prospect);
       prospectsCreated++;
-    } catch (_) { /* skip duplicates */ }
+    } catch (_) {}
   }
 
-  const debugSummary = `tenant=${tenant.tenantId} geo=${geographies[0]} mode=${mode} queries=${queries.length} brave=${braveRequests} found=${prospectsFound} created=${prospectsCreated}/${target} scoring=${tenant.scoringMode || "RULES"}`;
+  if (prospectsCreated < target) {
+    warnings.push(`LOW_RESULTS: ${prospectsCreated}/${target} prospects créés — moins que l'objectif demandé`);
+  }
+
+  const durationMs = Date.now() - startMs;
+
+  // ── Structured debug object ──
+  const debugInfo = {
+    sourceMode: mode,
+    tenantId: tenant.tenantId,
+    campaignId: campaign.id,
+    requestedCount: target,
+    rawResultsCount,
+    excludedCount,
+    duplicateCount,
+    kbTopUpCount,
+    scoredCount,
+    createdCount: prospectsCreated,
+    sourcesUsed,
+    queriesExecuted: queries.length,
+    braveRequests,
+    geographies,
+    scoringMode: tenant.scoringMode || "RULES",
+    fitThreshold,
+    errors,
+    warnings,
+    durationMs,
+    timestamp: new Date().toISOString(),
+  };
 
   const toolUsage = {
     braveRequests,
@@ -367,18 +412,19 @@ export async function runSearchEngine(base44, campaign, options = {}) {
   return {
     prospectsFound,
     prospectsCreated,
-    duplicatesSkipped,
+    duplicatesSkipped: duplicateCount,
     queriesExecuted: queries.length,
     braveRequests,
     sourcesUsed,
     existingCount: existingProspects.length,
-    debugSummary,
+    debugInfo,
+    // Kept for backward-compat
+    debugSummary: `tenant=${tenant.tenantId} geo=${geographies[0]} mode=${mode} queries=${queries.length} brave=${braveRequests} raw=${rawResultsCount} excluded=${excludedCount} found=${prospectsFound} created=${prospectsCreated}/${target} kb=${kbTopUpCount} scoring=${tenant.scoringMode || "RULES"} warnings=${warnings.length} duration=${durationMs}ms`,
     toolUsage,
   };
 }
 
-// ─── HTTP handler (direct invocation) ────────────────────────────────────────
-// Permet aussi d'invoquer le moteur directement via base44.functions.invoke
+// ─── HTTP handler ─────────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
