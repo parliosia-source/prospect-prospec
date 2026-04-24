@@ -36,6 +36,8 @@ export default function AgentMissionDetail() {
   const [campaign, setCampaign] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [executeError, setExecuteError] = useState(null);
 
   useEffect(() => {
     base44.auth.me().then(setUser).catch(() => {});
@@ -57,6 +59,19 @@ export default function AgentMissionDetail() {
       setCampaign(camp);
     }
     setIsLoading(false);
+  };
+
+  const handleExecute = async () => {
+    setIsExecuting(true);
+    setExecuteError(null);
+    try {
+      const res = await base44.functions.invoke("executeAgentMission", { agentMissionId: missionId });
+      if (res?.data?.error) setExecuteError(res.data.error);
+    } catch (err) {
+      setExecuteError(err?.response?.data?.error || err.message || "Erreur inattendue");
+    }
+    await loadAll();
+    setIsExecuting(false);
   };
 
   const updateStatus = async (status) => {
@@ -105,9 +120,19 @@ export default function AgentMissionDetail() {
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-5">
       {/* Back */}
-      <Link to={createPageUrl("AgentMissions")} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
-        <ArrowLeft className="w-4 h-4" /> Missions agent
-      </Link>
+      <div className="flex items-center gap-3">
+        <Link to={createPageUrl("AgentMissions")} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
+          <ArrowLeft className="w-4 h-4" /> Missions agent
+        </Link>
+        {mission?.campaignId && (
+          <Link
+            to={createPageUrl("CampaignDetail") + "?id=" + mission.campaignId}
+            className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+          >
+            <ChevronRight className="w-4 h-4" /> Voir la campagne
+          </Link>
+        )}
+      </div>
 
       {/* Header */}
       <div className="bg-white rounded-xl border shadow-sm p-5">
@@ -136,25 +161,41 @@ export default function AgentMissionDetail() {
             </div>
           </div>
 
-          {user?.role === "admin" && (
-            <div className="flex gap-2 flex-shrink-0">
-              {mission.status !== "RUNNING" && (
-                <Button size="sm" variant="outline" disabled={!!updatingId} onClick={() => updateStatus("RUNNING")} className="text-xs text-blue-600 border-blue-200 hover:bg-blue-50">
-                  {updatingId === "RUNNING" ? <Loader2 className="w-3 h-3 animate-spin" /> : "→ Running"}
-                </Button>
-              )}
-              {mission.status !== "COMPLETED" && (
-                <Button size="sm" variant="outline" disabled={!!updatingId} onClick={() => updateStatus("COMPLETED")} className="text-xs text-green-600 border-green-200 hover:bg-green-50">
-                  {updatingId === "COMPLETED" ? <Loader2 className="w-3 h-3 animate-spin" /> : "→ Completed"}
-                </Button>
-              )}
-              {mission.status !== "FAILED" && (
-                <Button size="sm" variant="outline" disabled={!!updatingId} onClick={() => updateStatus("FAILED")} className="text-xs text-red-600 border-red-200 hover:bg-red-50">
-                  {updatingId === "FAILED" ? <Loader2 className="w-3 h-3 animate-spin" /> : "→ Failed"}
-                </Button>
-              )}
-            </div>
-          )}
+          <div className="flex gap-2 flex-shrink-0 flex-wrap">
+            {/* Bouton principal : Exécuter la mission */}
+            {(mission.status === "PENDING" || mission.status === "FAILED") && (
+              <Button
+                onClick={handleExecute}
+                disabled={isExecuting}
+                className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+              >
+                {isExecuting
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Exécution en cours…</>
+                  : <><Bot className="w-4 h-4" /> Exécuter la mission</>}
+              </Button>
+            )}
+
+            {/* Boutons debug admin */}
+            {user?.role === "admin" && (
+              <>
+                {mission.status !== "RUNNING" && (
+                  <Button size="sm" variant="outline" disabled={!!updatingId || isExecuting} onClick={() => updateStatus("RUNNING")} className="text-xs text-blue-600 border-blue-200 hover:bg-blue-50">
+                    {updatingId === "RUNNING" ? <Loader2 className="w-3 h-3 animate-spin" /> : "→ Running"}
+                  </Button>
+                )}
+                {mission.status !== "COMPLETED" && (
+                  <Button size="sm" variant="outline" disabled={!!updatingId || isExecuting} onClick={() => updateStatus("COMPLETED")} className="text-xs text-green-600 border-green-200 hover:bg-green-50">
+                    {updatingId === "COMPLETED" ? <Loader2 className="w-3 h-3 animate-spin" /> : "→ Completed"}
+                  </Button>
+                )}
+                {mission.status !== "FAILED" && (
+                  <Button size="sm" variant="outline" disabled={!!updatingId || isExecuting} onClick={() => updateStatus("FAILED")} className="text-xs text-red-600 border-red-200 hover:bg-red-50">
+                    {updatingId === "FAILED" ? <Loader2 className="w-3 h-3 animate-spin" /> : "→ Failed"}
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -215,17 +256,53 @@ export default function AgentMissionDetail() {
         </div>
       )}
 
-      {/* Résumé d'exécution */}
-      {mission.resultSummary && (
-        <div className="bg-white rounded-xl border shadow-sm p-5">
-          <h2 className="font-semibold text-sm text-slate-800 mb-3 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-green-500" /> Résumé d'exécution
-          </h2>
-          <div className="bg-green-50 border border-green-100 rounded-lg px-4 py-3 text-sm text-green-900 leading-relaxed whitespace-pre-wrap">
-            {mission.resultSummary}
+      {/* Erreur d'exécution frontend */}
+      {executeError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <div className="text-sm font-medium text-red-700 mb-1">Erreur lors de l'exécution</div>
+            <div className="font-mono text-xs text-red-600">{executeError}</div>
           </div>
         </div>
       )}
+
+      {/* Résumé d'exécution */}
+      {mission.resultSummary && (() => {
+        let parsed = null;
+        try { parsed = JSON.parse(mission.resultSummary); } catch (_) { /* raw string */ }
+        return (
+          <div className="bg-white rounded-xl border shadow-sm p-5">
+            <h2 className="font-semibold text-sm text-slate-800 mb-3 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-green-500" /> Résumé d'exécution
+            </h2>
+            {parsed ? (
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                {[
+                  { label: "Prospects demandés", value: parsed.prospectsRequested, color: "text-slate-700" },
+                  { label: "Prospects trouvés", value: parsed.prospectsFound, color: "text-blue-700" },
+                  { label: "Prospects créés", value: parsed.prospectsCreated, color: "text-green-700" },
+                  { label: "Doublons ignorés", value: parsed.duplicatesSkipped, color: "text-slate-500" },
+                  { label: "Requêtes exécutées", value: parsed.queriesExecuted, color: "text-slate-500" },
+                  { label: "Appels Brave", value: parsed.braveRequests, color: "text-slate-500" },
+                ].map(({ label, value, color }) => value !== undefined && (
+                  <div key={label} className="bg-slate-50 rounded-lg px-3 py-2">
+                    <div className="text-xs text-slate-400">{label}</div>
+                    <div className={`text-xl font-bold ${color}`}>{value}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="bg-green-50 border border-green-100 rounded-lg px-4 py-3 text-sm text-green-900 leading-relaxed whitespace-pre-wrap">
+                {mission.resultSummary}
+              </div>
+            )}
+            {parsed?.sourcesUsed && (
+              <div className="text-xs text-slate-400 mt-1">Sources : {parsed.sourcesUsed.join(", ")}</div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Erreur si FAILED */}
       {mission.status === "FAILED" && mission.errorMessage && (
