@@ -22,6 +22,21 @@
       ],
       "default": "DRAFT"
     },
+    "sourceMode": {
+      "type": "string",
+      "enum": [
+        "KB_ONLY",
+        "WEB_ENRICHED",
+        "AGENT"
+      ],
+      "default": "WEB_ENRICHED",
+      "description": "Source de prospects: KB_ONLY=base existante, WEB_ENRICHED=recherche web, AGENT=agent autonome"
+    },
+    "kbOnlyMode": {
+      "type": "boolean",
+      "default": false,
+      "description": "Conserv\u00e9 pour r\u00e9trocompatibilit\u00e9 \u2014 pr\u00e9f\u00e9rer sourceMode"
+    },
     "targetCount": {
       "type": "number",
       "default": 50
@@ -38,7 +53,8 @@
         "SMALL",
         "MID",
         "LARGE",
-        "ENTERPRISE"
+        "ENTERPRISE",
+        "ALL"
       ]
     },
     "locationMode": {
@@ -52,11 +68,6 @@
     },
     "locationQuery": {
       "type": "string"
-    },
-    "kbOnlyMode": {
-      "type": "boolean",
-      "default": false,
-      "description": "Si true, la recherche utilise uniquement la KB sans recherche web"
     },
     "keywords": {
       "type": "array",
@@ -72,7 +83,7 @@
         "ALL"
       ],
       "default": "ALL",
-      "description": "Niveau minimal de confiance KB requis pour inclure une entit\u00e9 dans la recherche"
+      "description": "Niveau minimal de confiance KB requis"
     },
     "extraExcludedDomains": {
       "type": "array",
@@ -80,12 +91,16 @@
         "type": "string"
       },
       "default": [],
-      "description": "Domaines suppl\u00e9mentaires \u00e0 exclure sp\u00e9cifiquement pour cette campagne"
+      "description": "Domaines suppl\u00e9mentaires \u00e0 exclure pour cette campagne"
     },
     "eventFitMinScore": {
       "type": "number",
       "default": 0,
-      "description": "Score minimum de fit \u00e9v\u00e9nementiel SYNC requis (0 = aucun filtre)"
+      "description": "Score minimum de fit requis (0 = aucun filtre)"
+    },
+    "agentBrief": {
+      "type": "string",
+      "description": "Brief de mission pour le Superagent (mode AGENT)"
     },
     "queryPlan": {
       "type": "object"
@@ -148,13 +163,11 @@
     },
     "analysisDoneCount": {
       "type": "number",
-      "default": 0,
-      "description": "Nombre de prospects trait\u00e9s (analys\u00e9s ou \u00e9chou\u00e9s) dans le batch en cours"
+      "default": 0
     },
     "analysisTargetCount": {
       "type": "number",
-      "default": 0,
-      "description": "Nombre total de prospects s\u00e9lectionn\u00e9s pour le batch d'analyse en cours"
+      "default": 0
     }
   },
   "required": [

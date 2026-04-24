@@ -5,9 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { X, Plus, Loader2, Database } from "lucide-react";
+import { X, Plus, Loader2, Database, Globe, Bot } from "lucide-react";
 
 const MAX_DISPLAYED_SECTORS = 12;
 
@@ -15,7 +14,7 @@ export default function CampaignModal({ open, onClose, onSave }) {
   const [form, setForm] = useState({
     name: "", targetCount: 50, industrySectors: [], companySize: "ALL",
     locationMode: "CITY", locationQuery: "", locationKey: "CUSTOM", keywords: [],
-    customSector: "", kbOnlyMode: false,
+    customSector: "", sourceMode: "WEB_ENRICHED", agentBrief: "",
   });
   const [kwInput, setKwInput] = useState("");
   const [saving, setSaving] = useState(false);
@@ -99,7 +98,11 @@ export default function CampaignModal({ open, onClose, onSave }) {
     if (form.customSector.trim() && !sectors.includes(form.customSector.trim())) {
       sectors.push(form.customSector.trim());
     }
-    const payload = { ...form, industrySectors: sectors };
+    const payload = {
+      ...form,
+      industrySectors: sectors,
+      kbOnlyMode: form.sourceMode === "KB_ONLY", // rétrocompatibilité
+    };
     delete payload.customSector;
     
     await onSave(payload, launch);
@@ -108,8 +111,8 @@ export default function CampaignModal({ open, onClose, onSave }) {
     onClose();
     setForm({
       name: "", targetCount: 50, industrySectors: [], companySize: "ALL",
-      locationMode: "CITY", locationQuery: "Montréal, QC", locationKey: "MONTREAL", keywords: [],
-      customSector: "", kbOnlyMode: false,
+      locationMode: "CITY", locationQuery: "", locationKey: "CUSTOM", keywords: [],
+      customSector: "", sourceMode: "WEB_ENRICHED", agentBrief: "",
     });
   };
 
@@ -269,23 +272,77 @@ export default function CampaignModal({ open, onClose, onSave }) {
             </div>
           </div>
 
-          {/* KB Only Mode */}
-          <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-100 rounded-lg">
-            <Checkbox
-              id="kbOnly"
-              checked={form.kbOnlyMode}
-              onCheckedChange={(checked) => setForm(f => ({ ...f, kbOnlyMode: checked === true }))}
-              className="mt-0.5"
-            />
-            <label htmlFor="kbOnly" className="cursor-pointer">
-              <div className="text-sm font-medium text-blue-800 flex items-center gap-1.5">
-                <Database className="w-3.5 h-3.5" />
-                Recherche rapide (base de connaissances uniquement)
+          {/* Source de prospects */}
+          <div>
+            <Label className="mb-2 block">Source de prospects</Label>
+            <div className="grid grid-cols-1 gap-2">
+              {[
+                {
+                  value: "KB_ONLY",
+                  icon: Database,
+                  title: "Base existante",
+                  desc: "Utilise uniquement la base de connaissances interne. Rapide, économique, sans appels web.",
+                  color: "blue",
+                },
+                {
+                  value: "WEB_ENRICHED",
+                  icon: Globe,
+                  title: "Recherche web enrichie",
+                  desc: "Recherche sur le web, enrichit les résultats, applique le scoring et déduplique.",
+                  color: "green",
+                },
+                {
+                  value: "AGENT",
+                  icon: Bot,
+                  title: "Agent autonome",
+                  desc: "Prépare une mission pour un Superagent : recherche, qualification, scoring et génération de messages.",
+                  color: "purple",
+                },
+              ].map(({ value, icon: Icon, title, desc, color }) => {
+                const active = form.sourceMode === value;
+                const colorMap = {
+                  blue: { border: "border-blue-500 bg-blue-50", icon: "text-blue-500", title: "text-blue-800" },
+                  green: { border: "border-green-500 bg-green-50", icon: "text-green-500", title: "text-green-800" },
+                  purple: { border: "border-purple-500 bg-purple-50", icon: "text-purple-500", title: "text-purple-800" },
+                };
+                const c = colorMap[color];
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, sourceMode: value }))}
+                    className={`flex items-start gap-3 p-3 rounded-xl border-2 text-left transition-all ${
+                      active ? c.border : "border-slate-200 bg-white hover:border-slate-300"
+                    }`}
+                  >
+                    <div className={`mt-0.5 flex-shrink-0 ${active ? c.icon : "text-slate-400"}`}>
+                      <Icon className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className={`text-sm font-semibold ${active ? c.title : "text-slate-700"}`}>{title}</div>
+                      <div className={`text-xs mt-0.5 ${active ? "text-slate-600" : "text-slate-400"}`}>{desc}</div>
+                    </div>
+                    <div className={`ml-auto flex-shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 ${
+                      active ? `bg-${color}-500 border-${color}-500` : "border-slate-300"
+                    }`} />
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Brief pour le mode Agent */}
+            {form.sourceMode === "AGENT" && (
+              <div className="mt-3">
+                <Label className="text-xs text-slate-600 mb-1 block">Brief de mission pour l'agent</Label>
+                <textarea
+                  value={form.agentBrief}
+                  onChange={e => setForm(f => ({ ...f, agentBrief: e.target.value }))}
+                  rows={3}
+                  placeholder="Ex: Trouve 50 PME dans le secteur financier à Toronto, avec un budget événementiel probable. Priorise les entreprises de 100-500 employés."
+                  className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300 resize-none"
+                />
               </div>
-              <p className="text-xs text-blue-600 mt-0.5">
-                N'utilise que la KB interne — plus rapide, sans appels web. Idéal si la KB couvre bien le secteur ciblé.
-              </p>
-            </label>
+            )}
           </div>
 
           {/* Keywords */}
@@ -317,11 +374,11 @@ export default function CampaignModal({ open, onClose, onSave }) {
               {allSectors.length > 0 && <div>🏢 <strong>Secteur :</strong> {allSectors.join(", ")}</div>}
               {form.keywords.length > 0 && <div>🔑 <strong>Mots-clés :</strong> {form.keywords.join(", ")}</div>}
               <div>🎯 <strong>Objectif :</strong> {form.targetCount} prospects</div>
-              {form.kbOnlyMode && (
-                <div className="flex items-center gap-1 text-blue-600">
-                  <Database className="w-3 h-3" /> <strong>Mode base de connaissances uniquement</strong>
-                </div>
-              )}
+              <div>
+                {form.sourceMode === "KB_ONLY" && <span className="flex items-center gap-1 text-blue-600"><Database className="w-3 h-3" /> <strong>Base existante</strong></span>}
+                {form.sourceMode === "WEB_ENRICHED" && <span className="flex items-center gap-1 text-green-600"><Globe className="w-3 h-3" /> <strong>Recherche web enrichie</strong></span>}
+                {form.sourceMode === "AGENT" && <span className="flex items-center gap-1 text-purple-600"><Bot className="w-3 h-3" /> <strong>Agent autonome</strong></span>}
+              </div>
             </div>
           )}
         </div>

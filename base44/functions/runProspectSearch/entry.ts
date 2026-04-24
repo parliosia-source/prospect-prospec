@@ -1,1244 +1,438 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.6';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
-const BRAVE_KEY = Deno.env.get("BRAVE_API_KEY");
-const SERP_KEY = Deno.env.get("SERPAPI_API_KEY");
+// ─── Résolution du tenant ─────────────────────────────────────────────────────
+async function resolveTenant(base44: any, payload: any, campaign: any): Promise<any> {
+  const tenantId =
+    payload.tenantId ||
+    campaign?.tenantId ||
+    "sync-default";
 
-// ── Text normalizers ──────────────────────────────────────────────────────────
-function normSector(s) {
-  return (s || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "")
-    .replace(/\s*&\s*/g, " et ").replace(/\s+/g, " ").trim();
-}
-function normText(s) {
-  return (s || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").trim();
-}
-
-// Robust list parser
-function parseArr(v) {
-  if (Array.isArray(v)) return v;
-  if (!v || String(v).trim() === "" || String(v).toLowerCase() === "nan") return [];
-  const s = String(v).trim();
-  if (s.startsWith("[")) { try { return JSON.parse(s).map(x => String(x).trim()).filter(Boolean); } catch(_) {} }
-  return s.split(",").map(x => x.trim()).filter(Boolean);
-}
-
-// ── Sector scoring rules ──────────────────────────────────────────────────────
-// Each sector has: strongSignals (boost), exclusions (hard reject / heavy penalty)
-const SECTOR_SCORING_RULES = {
-  "Finance & Assurance": {
-    strongSignals: [
-      "banque","caisse","credit union","institution financiere","desjardins",
-      "assurance","insurance","courtier","broker","mutuelle","mga","underwriting","reassurance",
-      "investissement","gestion d actifs","asset management","capital","fonds","fonds de placement","pe","vc","private equity","venture capital",
-      "paiement","payment","psp","acquiring","merchant services","fintech",
-      "bourse","valeurs mobilieres","securities","fiducie","trust","mortgage","hypotheque",
-      "actuariat","actuarial","souscription",
-    ],
-    exclusions: [
-      "fondation","foundation","hopital","chu","cusm","chum","hospital","centre hospitalier",
-      "universite","cegep","college","ecole","campus",
-      "festival","tourisme","tourism",
-      "ville de","municipalite","arrondissement","gouvernement","ministere","ciusss","cisss",
-    ],
-  },
-  "Immobilier": {
-    strongSignals: [
-      "immobilier","real estate","promoteur","developpeur immobilier","constructeur","courtier immobilier",
-      "gestion immobiliere","property management","reit","fonds immobilier","condo","logement",
-      "hypotheque","mortgage","financement immobilier",
-    ],
-    exclusions: ["hopital","universite","fondation","gouvernement","municipalite"],
-  },
-  "Droit & Comptabilite": {
-    strongSignals: [
-      "avocat","cabinet d avocats","law firm","barreau","notaire","huissier",
-      "comptable","cpa","audit","fiscalite","conformite","cabinet comptable",
-      "juridique","litige","contentieux","restructuration",
-    ],
-    exclusions: ["hopital","universite","fondation","gouvernement"],
-  },
-  "Transport & Logistique": {
-    strongSignals: [
-      "transport","logistique","livraison","cargo","fret","entrepot","courrier",
-      "distribution","supply chain","camionnage","expediteur","freight","3pl","4pl",
-      "transitaire","douane","maritime","aerien","ferroviaire",
-    ],
-    exclusions: ["hopital","universite","fondation","gouvernement"],
-  },
-  "Technologie": {
-    strongSignals: [
-      "logiciel","software","saas","cloud","informatique","it","intelligence artificielle","ia","ai",
-      "cybersecurite","donnees","data","developpement","startup tech","plateforme numerique",
-      "erp","crm","devops","infrastructure","api","mobile app","solution numerique",
-    ],
-    exclusions: ["hopital","universite","fondation","gouvernement","municipalite"],
-  },
-  "Santé & Pharma": {
-    strongSignals: [
-      "hopital","hospital","clinique","clinic","sante","health","pharma","pharmaceutique",
-      "medical","medecin","diagnostic","therapie","laboratoire","pharmacie","biotechnologie",
-      "biotech","recherche clinique","soins","infirmier","chirurgie","radiologie","imagerie",
-      "dentaire","optometrie","physiotherapie","ergotherapie",
-    ],
-    exclusions: [],
-  },
-  "Gouvernement & Public": {
-    strongSignals: [
-      "gouvernement","government","ministere","ministry","municipalite","municipality",
-      "ville de","city of","province","federal","agence gouvernementale","fonction publique",
-      "service public","public service","ciusss","cisss","arrondissement","prefet","depute",
-    ],
-    exclusions: [],
-  },
-  "Éducation & Formation": {
-    strongSignals: [
-      "universite","university","college","cegep","ecole","school","formation","training",
-      "enseignement","education","academique","campus","pedagogie","apprentissage","diplome",
-      "programme d etudes","recherche universitaire","faculte","professeur",
-    ],
-    exclusions: [],
-  },
-  "Associations & OBNL": {
-    strongSignals: [
-      "association","obnl","npo","organisme","charitable","benevole","ong","syndicat",
-      "communautaire","ordre professionnel","fondation","federation","regroupement",
-      "chambre de commerce","conseil","cooperative","mutuelle",
-    ],
-    exclusions: [],
-  },
-  "Industrie & Manufacture": {
-    strongSignals: [
-      "usine","manufacture","fabrication","production","industrie","acier","chimie","mecanique",
-      "automatisation","assemblage","machinerie","ingenierie","engineering","plasturgie",
-      "metallurgie","agroalimentaire","emballage","transformation",
-    ],
-    exclusions: [],
-  },
-  "Commerce de détail": {
-    strongSignals: [
-      "commerce","retail","magasin","boutique","vente au detail","detaillant","e-commerce","ecommerce",
-      "mode","fashion","alimentation","franchise","supermarche","epicerie","quincaillerie",
-      "chaine de magasins","banniere","enseigne","marque de commerce",
-    ],
-    exclusions: [
-      // Associations / councils / trade bodies — not retailers
-      "conseil quebecois","conseil canadien","conseil du commerce","retail council","cqcd","ccd",
-      "chambre de commerce","association des detaillants","federation du commerce",
-      "association","obnl","fondation","syndicat","ordre professionnel","federation","regroupement",
-      // Shopping centres / malls / venues — real estate, not retailers
-      "centre commercial","mall","galerie marchande","promenades","carrefour laval",
-      "place ville-marie","fairview","cadillac fairview","cominar","ivanhoe cambridge",
-      "oxford properties","quartier","complexe","place",
-      // Hospitality / tourism / restaurants — not corporate retail
-      "hotel","restauration","tourisme","tourism","auberge","hebergement","resort","spa",
-      // Wholesale / distribution — not retail
-      "grossiste","distributeur","distribution","entrepot","cargo","fret",
-      // Government / public
-      "gouvernement","municipalite","ville de","ministere",
-    ],
-  },
-};
-
-// Sectors where exclusions are HARD blocks (entity is rejected, not just penalized)
-const HARD_BLOCK_SECTORS = new Set(["Commerce de détail"]);
-
-// Compute sectorScore (0–100) for a KB entity against a requested sector
-// Returns { score, tier, reasons, rejectReason }
-function computeSectorScore(kb, sector) {
-  const rules = SECTOR_SCORING_RULES[sector];
-  const reasons = ["sectorMatch_accepted"];
-  let score = 70; // base — spread will come from strong-signal hits below
-
-  if (!rules) {
-    return { score, tier: "STRICT", reasons: ["no_rules_accepted"], rejectReason: null };
-  }
-
-  // Full identity blob (name + labels + sectors + notes + tags for retail)
-  const identityBlob = normText([
-    kb.name, kb.normalizedName, kb.industryLabel, kb.primaryTheme,
-    ...parseArr(kb.industrySectors), ...parseArr(kb.themes),
-    kb.notes || "", ...parseArr(kb.tags),
-  ].filter(Boolean).join(" "));
-
-  // ── Exclusions ──────────────────────────────────────────────────────────
-  const isHardBlock = HARD_BLOCK_SECTORS.has(sector);
-  for (const excl of rules.exclusions) {
-    if (identityBlob.includes(normText(excl))) {
-      if (isHardBlock) {
-        // Hard block: reject entirely — these are non-retail entities
-        return { score: 0, tier: "REJECTED", reasons: [`exclusion_hard_block:${excl}`], rejectReason: excl };
-      }
-      score = Math.max(50, score - 25);
-      reasons.push(`exclusion_hit_non_blocking:${excl}`);
-      break;
-    }
-  }
-
-  // ── Strong-signal score spread ──────────────────────────────────────────
-  // Count how many strong signals are present — creates meaningful score distribution
-  const strongHits = rules.strongSignals.filter(sig => identityBlob.includes(normText(sig))).length;
-  if (strongHits >= 4) { score += 20; reasons.push(`strongSignals:${strongHits}`); }
-  else if (strongHits >= 2) { score += 10; reasons.push(`strongSignals:${strongHits}`); }
-  else if (strongHits === 1) { score += 5; reasons.push(`strongSignals:1`); }
-  // 0 strong signals: no boost (stays at base 70)
-
-  // ── Boost: primaryTheme or industryLabel is an exact match ─────────────
-  const normSec = normSector(sector);
-  if (normSector(kb.primaryTheme) === normSec || normSector(kb.industryLabel) === normSec) {
-    score = Math.max(score, 85);
-    reasons.push("primaryTheme_exactMatch");
-  }
-
-  // ── Retail-specific: boost for recognizable retail signals ───────────────
-  if (sector === "Commerce de détail") {
-    if (/\b(magasin|boutique|franchise|supermarche|epicerie|chaine)\b/.test(identityBlob)) {
-      score += 5;
-      reasons.push("retail_specific_boost");
-    }
-    // Penalize if entity type looks like a trade body or venue
-    if (kb.entityType && /association|venue|mall|centre|federation/i.test(kb.entityType)) {
-      score = Math.max(50, score - 15);
-      reasons.push("entityType_penalty");
-    }
-  }
-
-  return { score: Math.min(score, 100), tier: "STRICT", reasons, rejectReason: null };
-}
-
-// ── GM city set ────────────────────────────────────────────────────────────────
-const GM_CITIES_NORM = new Set([
-  "montreal","laval","longueuil","brossard","terrebonne","repentigny","boucherville",
-  "dorval","pointe-claire","kirkland","beaconsfield","saint-lambert","westmount",
-  "mont-royal","cote-saint-luc","verdun","anjou","outremont","pierrefonds","lasalle",
-  "saint-laurent","saint-jerome","blainville","boisbriand","mascouche","mirabel",
-  "la-prairie","chateauguay","candiac","laprairie","saint-jean-sur-richelieu",
-  "vaudreuil-dorion","les-coteaux","sainte-catherine","sainte-julie","varennes",
-  "montreal-est","montreal-nord","montreal-ouest","lachine","rosemont","villeray",
-  "hochelaga","riviere-des-prairies","saint-leonard","ahuntsic","mtl","grand montreal",
-  "greater montreal","grand-montreal",
-]);
-
-function isGmQuery(locationQuery) {
-  const norm = normText(locationQuery);
-  if (GM_CITIES_NORM.has(norm)) return true;
-  for (const token of norm.split(/[\s,]+/)) {
-    if (GM_CITIES_NORM.has(token)) return true;
-  }
-  return false;
-}
-
-// ── Province aliases ───────────────────────────────────────────────────────────
-const PROVINCE_ALIASES = {
-  "QC": ["québec","quebec","qc","montréal","montreal","laval","longueuil","gatineau","sherbrooke"],
-  "ON": ["ontario","on","toronto","ottawa","hamilton","london"],
-  "BC": ["british columbia","colombie-britannique","bc","vancouver","victoria"],
-  "AB": ["alberta","ab","calgary","edmonton"],
-};
-
-// ── Sector synonyms (for web search queries) ──────────────────────────────────
-const SECTOR_SYNONYMS = {
-  "Technologie": ["IT","informatique","SaaS","logiciel","software","cloud","IA","AI","numérique","digital","cybersécurité","données","data","développement","startup","tech","infrastructure","DevOps","plateforme","ERP","CRM"],
-  "Finance & Assurance": ["banque","bank","assurance","insurance","crédit","placement","investissement","fintech","capital","fonds","courtage","caisse","gestion d'actifs","paiement"],
-  "Santé & Pharma": ["santé","health","pharma","médical","hôpital","clinique","médecin","diagnostic","thérapie","laboratoire","pharmacie"],
-  "Gouvernement & Public": ["gouvernement","government","municipalité","ville","province","fédéral","ministère","assemblée","CISSS","CIUSSS","agence gouvernementale"],
-  "Éducation & Formation": ["université","collège","école","cégep","formation","training","cours","apprentissage","diplôme"],
-  "Associations & OBNL": ["association","OBNL","NPO","fondation","organisme","charitable","bénévole","ONG","syndicat","communautaire","ordre professionnel"],
-  "Immobilier": ["immobilier","real estate","propriété","construction","promoteur","logement","bureau","bâtiment","terrain","condo","REIT"],
-  "Droit & Comptabilité": ["avocat","droit","law","comptable","comptabilité","notaire","juridique","fiscalité","audit","conformité","CPA"],
-  "Industrie & Manufacture": ["usine","manufacture","fabrication","production","industrie","acier","chimie","mécanique","automatisation","assemblage","machinerie","ingénierie"],
-  "Commerce de détail": ["retail","magasin","boutique","détaillant","e-commerce","mode","alimentation","franchise","chaîne de magasins","vente au détail"],
-  "Transport & Logistique": ["transport","logistique","livraison","cargo","fret","entrepôt","courrier","distribution","supply chain"],
-};
-
-// ── Noise / blocked ────────────────────────────────────────────────────────────
-const BLOCKED_DOMAINS = new Set([
-  "wikipedia.org","fr.wikipedia.org","youtube.com","facebook.com","instagram.com",
-  "twitter.com","x.com","linkedin.com","tiktok.com","reddit.com",
-  "eventbrite.com","eventbrite.ca","meetup.com","ticketmaster.com","ticketmaster.ca",
-  "glassdoor.com","indeed.com","monster.com",
-  "lapresse.ca","ledevoir.com","radio-canada.ca","cbc.ca","tvanouvelles.ca",
-  "cision.com","newswire.ca","prnewswire.com","globenewswire.com",
-  "google.com","bing.com","yelp.com","tripadvisor.com",
-  "wordpress.com","wix.com","squarespace.com","medium.com",
-  "pagesjaunes.ca","yellowpages.ca","411.ca",
-  "crunchbase.com","clutch.co","g2.com","capterra.com",
-]);
-const BLOCKED_PATHS = /\/blog\/|\/news\/|\/press\/|\/article\/|\/actualite\/|\/careers\/|\/jobs\/|\/events\/|\/agenda\/|\.pdf$/i;
-const HARD_EXCL_TITLE = /\b(top \d+|best|directory|ranking|list|annuaire|répertoire|comment|guide complet|how to)\b/i;
-
-const TWO_PART_TLDS = new Set(["qc.ca","co.ca","on.ca","bc.ca","ab.ca","co.uk","org.uk"]);
-function getDomain(url) {
   try {
-    const host = new URL(url).hostname.replace(/^www\./, "");
-    const labels = host.split(".");
-    if (labels.length >= 3 && TWO_PART_TLDS.has(labels.slice(-2).join("."))) return labels.slice(-3).join(".");
-    return labels.slice(-2).join(".");
-  } catch { return ""; }
-}
+    const results = await base44.asServiceRole.entities.TenantSettings.filter(
+      { tenantId, isActive: true }, "-created_date", 1
+    );
+    if (results?.length > 0) return results[0];
+  } catch (_) { /* fallback */ }
 
-// ── Brand-family / corporate-group deduplication ──────────────────────────────
-// Extracts a normalized "brand fingerprint" from a company name.
-// Removes legal suffixes, accents, punctuation, and common filler words
-// so that "Metro Inc.", "Métro inc", "Groupe Metro" all produce "metro".
-// Used to detect same-group duplicates (e.g. Provigo/Metro/Maxi → Metro group).
-const LEGAL_SUFFIXES = /\b(inc|ltee|ltée|ltd|corp|corporation|group|groupe|holdings|holding|international|canada|quebec|québec|national|entreprise|compagnie|co|s\.?a\.?|s\.?e\.?c\.?)\b\.?/gi;
-const FILLER_WORDS = /\b(le|la|les|de|du|des|et|the|of|and|&)\b/gi;
-
-function brandFingerprint(name) {
-  if (!name) return "";
-  return name
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
-    .toLowerCase()
-    .replace(LEGAL_SUFFIXES, " ")
-    .replace(FILLER_WORDS, " ")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ")
-    .filter(w => w.length >= 3)       // drop very short tokens
-    .sort()                            // canonical order
-    .join("-");
-}
-
-// Known retail corporate-group families: domains that belong to the same parent.
-// If a fingerprint from this list is already seen, skip the sibling.
-const RETAIL_GROUP_FAMILIES = [
-  ["metro","provigo","maxi","super-c","richelieu"],       // Metro Inc. group
-  ["sobeys","iga","safeway","thrifty"],                   // Empire / Sobeys group
-  ["loblaws","provigo","maxi","shoppers","no-frills","president-s-choice"],  // Loblaw group
-  ["couche-tard","mac-s","circle-k"],                     // Alimentation Couche-Tard
-  ["reitmans","penningtons","addition-elle","rw-co"],     // Reitmans group
-  ["groupe-bmr","rona","lowe-s"],                         // Hardware retail group
-  ["dollarama","dollar","five-and-below"],                // Dollar store group
-  ["simons","sport-expert","atmospherics"],               // La Maison Simons group
-];
-
-// Build a reverse-lookup: fingerprint → canonical group id
-const RETAIL_GROUP_MAP = new Map();
-for (let gIdx = 0; gIdx < RETAIL_GROUP_FAMILIES.length; gIdx++) {
-  for (const token of RETAIL_GROUP_FAMILIES[gIdx]) {
-    RETAIL_GROUP_MAP.set(token, gIdx);
-  }
-}
-
-const MTL_SNIPPET_RE = /\b(montr[eé]al|laval|longueuil|brossard|terrebonne|repentigny|boucherville|dorval|pointe-claire|westmount|verdun|anjou|outremont|lasalle|saint-laurent|blainville|boisbriand|mirabel|ch[aâ]teauguay|vaudreuil|lachine|ahuntsic|mtl)\b/i;
-
-// ── Brave Search ───────────────────────────────────────────────────────────────
-const braveRL = { remaining: -1, reset: -1, count429: 0, quotaExceeded: false };
-function parseBraveHeaders(res) {
-  const r = parseInt(res.headers.get("X-RateLimit-Remaining") || "-1");
-  const t = parseInt(res.headers.get("X-RateLimit-Reset") || "-1");
-  if (r !== -1) braveRL.remaining = r;
-  if (t !== -1) braveRL.reset = t;
-}
-
-async function braveSearch(query, count = 20, offset = 0) {
-  if (braveRL.quotaExceeded) return { results: [], rateLimited: true };
-  if (braveRL.remaining === 0 && braveRL.reset > 0) await new Promise(r => setTimeout(r, Math.max(braveRL.reset * 1000, 1000)));
-  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}&offset=${offset}&extra_snippets=true&country=ca`;
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 12000);
   try {
-    const res = await fetch(url, { headers: { "Accept":"application/json","X-Subscription-Token": BRAVE_KEY }, signal: ctrl.signal });
-    clearTimeout(timeout);
-    parseBraveHeaders(res);
-    if (res.status === 402) { braveRL.quotaExceeded = true; return { results: [], rateLimited: true, status: 402 }; }
-    if (res.status === 429) { braveRL.count429++; return { results: [], rateLimited: true, status: 429 }; }
-    if (!res.ok) return { results: [], rateLimited: false, status: res.status };
-    const data = await res.json();
-    return { results: data.web?.results || [], rateLimited: false };
-  } catch (e) {
-    clearTimeout(timeout);
-    return { results: [], rateLimited: e.name === "AbortError" };
-  }
-}
+    const fallback = await base44.asServiceRole.entities.TenantSettings.filter(
+      { settingsId: "global" }, "-created_date", 1
+    );
+    if (fallback?.length > 0) return fallback[0];
+  } catch (_) { /* ignore */ }
 
-// ── SerpAPI fallback ───────────────────────────────────────────────────────────
-async function serpSearch(query) {
-  if (!SERP_KEY) return [];
-  try {
-    const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&location=Montreal,Quebec,Canada&hl=fr&gl=ca&api_key=${SERP_KEY}&num=20`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.organic_results || []).map(r => ({ url: r.link, title: r.title || "", snippet: r.snippet || "" }));
-  } catch { return []; }
-}
-
-// ── Web result normalizer ─────────────────────────────────────────────────────
-// Retourne TOUJOURS un objet avec `accepted: boolean`.
-// Si accepted=false → { accepted: false, rejectReason: string }
-// Si accepted=true  → { accepted: true, companyName, website, domain, snippet, title, bestSector, score }
-function normalizeWebResult(r, requiredSectors, _isMTL) {
-  const url = r.url || "";
-  const title = r.title || "";
-  const snippet = r.snippet || "";
-  if (BLOCKED_PATHS.test(url) || HARD_EXCL_TITLE.test(title)) return { accepted: false, rejectReason: "blockedPathOrTitle" };
-  const domain = getDomain(url);
-  if (!domain || BLOCKED_DOMAINS.has(domain)) return { accepted: false, rejectReason: "blockedDomain" };
-
-  const fullText = normText(`${title} ${snippet} ${domain}`);
-
-  let maxScore = 0;
-  let bestSector = null;
-  for (const sector of requiredSectors) {
-    const syns = [sector, ...(SECTOR_SYNONYMS[sector] || [])];
-    const score = syns.filter(s => fullText.includes(normText(s))).length;
-    if (score > maxScore) { maxScore = score; bestSector = sector; }
-  }
-  // Require at least 2 synonym hits for web results to reduce weak matches
-  if (requiredSectors.length > 0 && maxScore < 2) return { accepted: false, rejectReason: "noSectorMatch" };
-
-  const nameMatch = title.match(/^([A-ZÀ-ÿa-zà-ÿ][^\|–\-]{2,60}?)(?:\s*[-–|]|$)/);
-  const companyName = nameMatch ? nameMatch[1].trim() : title.split("|")[0].slice(0, 100).trim();
-
-  // Reject obvious non-company results even if domain/snippet passed
-  if (/\b(top \d+|best \d+|liste|directory|classement|ranking|guide|how to|comment)\b/i.test(snippet)) {
-    return { accepted: false, rejectReason: "directorySnippet" };
-  }
-
-  // ── Retail-specific web noise rejection ────────────────────────────────────
-  if (requiredSectors.includes("Commerce de détail")) {
-    // Reject shopping centres, malls, and venue operators — real estate, not retail brands
-    if (/\b(centre commercial|mall|galerie marchande|promenades|carrefour|complexe|fairview|ivanhoe|cadillac|oxford properties)\b/i.test(`${title} ${snippet}`)) {
-      return { accepted: false, rejectReason: "retail_venue_operator" };
-    }
-    // Reject trade associations, councils, and industry bodies
-    if (/\b(conseil|association|federation|chambre de commerce|retail council|cqcd|syndicat|ordre professionnel)\b/i.test(`${title} ${snippet}`)) {
-      return { accepted: false, rejectReason: "retail_trade_body" };
-    }
-    // Reject hospitality, tourism, and food-service (restaurants, hotels) — not corporate retail
-    if (/\b(hotel|restauration|restaurant|tourisme|tourism|auberge|resort|spa|hebergement)\b/i.test(`${title} ${snippet}`) &&
-        !/\b(magasin|boutique|franchise|chaine|retail|detaillant)\b/i.test(`${title} ${snippet}`)) {
-      return { accepted: false, rejectReason: "retail_hospitality_noise" };
-    }
-    // Reject wholesale / distribution (not retail-facing)
-    if (/\b(grossiste|distributeur|entrepot|cargo|fret|supply chain|3pl|4pl)\b/i.test(`${title} ${snippet}`)) {
-      return { accepted: false, rejectReason: "retail_wholesale_noise" };
-    }
-  }
-
-  let score = 0;
-  if (maxScore >= 4) score += 40; else if (maxScore >= 2) score += 25; else score += 10;
-  if (MTL_SNIPPET_RE.test(`${title} ${snippet}`)) score += 30;
-  if (domain.length < 40 && !/directory|pages|annuaire|list|rank|top|blog|news|review/.test(domain)) score += 20;
-  if (snippet.length > 80) score += 10;
-
-  // Event-signal bonus: snippet mentions terms that strongly indicate the org organizes events
-  const snippetNorm = normText(snippet);
-  const eventHits = EVENT_SIGNAL_TERMS_NORM.filter(t => snippetNorm.includes(t)).length;
-  if (eventHits >= 2) score += 35;      // strong event signal — major boost
-  else if (eventHits === 1) score += 15; // weak signal — modest boost
-
-  return { accepted: true, companyName, website: url, domain, snippet, title, bestSector, score, eventHits };
-}
-
-// ── Event-intent vocabulary for prospect search ───────────────────────────────
-// These terms signal that an organization *organizes* events — core ICP for SYNC
-const EVENT_INTENT_TERMS = [
-  "congrès annuel", "gala annuel", "assemblée générale", "conférence annuelle",
-  "événement corporatif", "corporate event", "townhall", "séminaire", "formation interne",
-  "journée recognition", "soirée gala", "remise de prix", "colloque", "symposium",
-  "webdiffusion", "hybride", "assemblée des membres",
-];
-// Short terms used in snippet scoring
-const EVENT_SIGNAL_TERMS_NORM = [
-  "congres","gala","assemblee","conference","evenement","colloque","symposium",
-  "seminaire","formation","townhall","webdiffusion","hybride","ceremonie","remise de prix",
-  "soiree","banquet","convention","forum","sommet","summit","annual meeting","agm","aga",
-];
-
-// ── Brave query builder ────────────────────────────────────────────────────────
-const EXCL = '-site:linkedin.com -site:facebook.com -site:glassdoor.com -site:indeed.com -site:eventbrite.com -site:wikipedia.org';
-function buildQueries(sectors, loc, keywords) {
-  const locCity = loc.split(",")[0].trim();
-  const kwStr = (keywords || []).slice(0, 4).map(k => `"${k}"`).join(" ");
-  const queries = [];
-
-  // Event-intent queries first — highest-quality signal for SYNC's ICP
-  for (const sector of sectors.slice(0, 4)) {
-    const syns = (SECTOR_SYNONYMS[sector] || []).slice(0, 3);
-    const synStr = syns.map(s => `"${s}"`).join(" OR ");
-    queries.push(`(${synStr}) ("gala" OR "congrès" OR "assemblée générale" OR "conférence annuelle") ${locCity} ${EXCL}`);
-    queries.push(`entreprises "${sector}" ("événement annuel" OR "gala" OR "congrès" OR "soirée") ${locCity} ${EXCL}`);
-  }
-
-  // ── Retail-specific queries: chain/brand focused, exclude malls and associations ──
-  if (sectors.includes("Commerce de détail")) {
-    const retailExcl = `${EXCL} -"centre commercial" -"conseil" -"association" -"chambre de commerce"`;
-    queries.push(`chaîne de magasins ${locCity} ("lancement" OR "formation" OR "réunion annuelle" OR "conférence") ${retailExcl}`);
-    queries.push(`détaillant franchise ${locCity} ("événement" OR "gala" OR "assemblée") ${retailExcl}`);
-    queries.push(`"vente au détail" entreprise ${locCity} siège social ${retailExcl}`);
-    queries.push(`marque de mode ${locCity} boutiques ${retailExcl}`);
-    queries.push(`franchiseur ${locCity} réseau de magasins ${retailExcl}`);
-    queries.push(`épicerie supermarché ${locCity} entreprise ${retailExcl}`);
-    queries.push(`détaillant alimentation ${locCity} siège social ${retailExcl}`);
-  }
-
-  // Standard sector queries (broader, lower signal)
-  for (const sector of sectors.slice(0, 6)) {
-    const syns = (SECTOR_SYNONYMS[sector] || []).slice(0, 5);
-    const synStr = syns.slice(0, 3).map(s => `"${s}"`).join(" OR ");
-    queries.push(`entreprises "${sector}" ${locCity} ${EXCL}`);
-    if (synStr) queries.push(`(${synStr}) entreprises ${locCity} ${EXCL}`);
-    if (kwStr) queries.push(`entreprises "${sector}" ${kwStr} ${locCity} ${EXCL}`);
-  }
-
-  return [...new Set(queries)];
-}
-
-// ── Fuzzy sector matching ─────────────────────────────────────────────────────
-function fuzzyMatchSectors(kb, requiredSectors) {
-  if (requiredSectors.length === 0) return { matchedCanonical: [], whichMode: null };
-  const reqNorm = requiredSectors.map(normSector);
-  const kbIS = parseArr(kb.industrySectors);
-  const kbTh = parseArr(kb.themes);
-
-  const normIS = kbIS.map(normSector);
-  const matchedFromIS = reqNorm.filter(r => normIS.includes(r));
-  if (matchedFromIS.length > 0) {
-    return { matchedCanonical: requiredSectors.filter(r => matchedFromIS.includes(normSector(r))), whichMode: "industrySectors" };
-  }
-
-  const normTh = kbTh.map(normSector);
-  const matchedFromTh = reqNorm.filter(r => normTh.includes(r));
-  if (matchedFromTh.length > 0) {
-    return { matchedCanonical: requiredSectors.filter(r => matchedFromTh.includes(normSector(r))), whichMode: "themes" };
-  }
-
-  if (reqNorm.includes(normSector(kb.primaryTheme))) {
-    const canonical = requiredSectors.filter(r => normSector(r) === normSector(kb.primaryTheme));
-    return { matchedCanonical: canonical.length > 0 ? canonical : [kb.primaryTheme], whichMode: "primaryTheme" };
-  }
-
-  if (reqNorm.includes(normSector(kb.industryLabel))) {
-    const canonical = requiredSectors.filter(r => normSector(r) === normSector(kb.industryLabel));
-    return { matchedCanonical: canonical.length > 0 ? canonical : [kb.industryLabel], whichMode: "industryLabel" };
-  }
-
-  return { matchedCanonical: [], whichMode: null };
-}
-
-// ── Retry helper ──────────────────────────────────────────────────────────────
-// retryStats.totalWaitMs tracks cumulative wait time so callers can exclude it
-// from the active processing budget.
-async function createProspectWithRetry(base44, payload, retryStats, maxRetries = 8) {
-  let lastErr;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await base44.entities.Prospect.create(payload);
-    } catch (err) {
-      const msg = (err.message || "").toLowerCase();
-      const isRateLimit = err.status === 429 || msg.includes("rate limit") || msg.includes("ratelimit") || msg.includes("too many");
-      if (!isRateLimit || attempt === maxRetries) throw err;
-      lastErr = err;
-      retryStats.createRetryCount++;
-      retryStats.rateLimitHitCount++;
-      // Exponential backoff + jitter: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s ± up to 500ms
-      const delay = Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 500);
-      const prospectName = payload.companyName || payload.domain || "?";
-      console.log(`[RETRY] Prospect.create (${prospectName}) attempt=${attempt + 1}/${maxRetries} delay=${delay}ms err=${err.message}`);
-      await new Promise(r => setTimeout(r, delay));
-      retryStats.totalWaitMs = (retryStats.totalWaitMs || 0) + delay;
-    }
-  }
-  // maxRetries exhausted — mark and re-throw
-  retryStats.rateLimitHitCount++;
-  retryStats.rateLimitExhausted = true;
-  throw lastErr;
-}
-
-// ── Create a Prospect record from a KB entity + scoring context ───────────────
-async function createProspectFromKb(base44, campaignId, campaign, kb, displaySectors, displayLabel, tier, sectorScore, retryStats) {
-  const qualityFlags = [`SECTOR_${tier}:${displaySectors[0] || "UNKNOWN"}`];
-  await createProspectWithRetry(base44, {
-    campaignId,
-    ownerUserId: campaign.ownerUserId,
-    companyName: kb.name,
-    website: kb.website || `https://${kb.domain}`,
-    domain: (kb.domain || "").toLowerCase(),
-    industry: displayLabel,
-    industrySectors: displaySectors,
-    industryLabel: displayLabel,
-    location: { city: kb.hqCity || "", country: kb.hqCountry || "CA" },
-    entityType: kb.entityType || "COMPANY",
-    status: "NOUVEAU",
-    sourceOrigin: "KB_V3",
-    kbEntityId: kb.id,
-    serpSnippet: kb.notes || "",
-    sourceUrl: kb.sourceUrl || "",
-    relevanceScore: sectorScore,
-    relevanceReasons: [`tier:${tier}`, `sectorScore:${sectorScore}`],
-  }, retryStats);
-}
-
-// ── Main ───────────────────────────────────────────────────────────────────────
-Deno.serve(async (req) => {
-  const base44 = createClientFromRequest(req);
-  const user = await base44.auth.me();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-
-  const body = await req.json();
-  const { campaignId } = body;
-  if (!campaignId) return Response.json({ error: "campaignId required" }, { status: 400 });
-
-  const campaigns = await base44.entities.Campaign.filter({ id: campaignId });
-  const campaign = campaigns[0];
-  if (!campaign) return Response.json({ error: "Campaign not found" }, { status: 404 });
-  if (campaign.ownerUserId !== user.email && user.role !== "admin") return Response.json({ error: "Forbidden" }, { status: 403 });
-
-  const START = Date.now();
-  const MAX_MS = 90 * 1000;
-  const kbOnlyMode = campaign.kbOnlyMode === true;
-
-  // Load API costs from settings
-  let apiCosts = {
-    "Brave Search": { unitCost: 0.001, unitType: "query" },
-    "SerpAPI": { unitCost: 0.005, unitType: "query" },
+  // Valeurs par défaut si tout échoue
+  return {
+    tenantId: "sync-default",
+    companyName: "Prospect",
+    defaultCity: "Montréal",
+    defaultCountry: "CA",
+    targetGeographies: ["Montréal, QC"],
+    searchKeywords: [],
+    excludedKeywords: [],
+    scoringMode: "RULES",
+    scoringWeights: null,
+    fitThresholdDefault: null,
+    industryProfile: "",
   };
-  const settingsArr = await base44.asServiceRole.entities.AppSettings.filter({ settingsId: "global" }).catch(() => []);
-  if (settingsArr[0]?.apiCosts) apiCosts = { ...apiCosts, ...settingsArr[0].apiCosts };
+}
 
-  async function logApiUsage(apiName, status, extraFields = {}) {
-    await base44.asServiceRole.entities.ApiUsageLog.create({
-      timestamp: new Date().toISOString(),
-      apiName,
-      functionName: "runProspectSearch",
-      cost: (apiCosts[apiName]?.unitCost || 0) * (extraFields.unitsUsed || 1),
-      unitsUsed: extraFields.unitsUsed || 1,
-      unitType: apiCosts[apiName]?.unitType || "query",
-      campaignId,
-      ownerUserId: user.email,
-      status,
-      ...extraFields,
-    }).catch(() => {});
-  }
+// ─── Résolution des géographies depuis tenant + campagne ──────────────────────
+function resolveGeographies(tenant: any, campaign: any): string[] {
+  // La campagne a priorité (locationQuery explicite)
+  if (campaign?.locationQuery) return [campaign.locationQuery];
+  // Sinon, targetGeographies du tenant
+  if (tenant.targetGeographies?.length > 0) return tenant.targetGeographies;
+  // Fallback
+  if (tenant.defaultCity) return [`${tenant.defaultCity}, ${tenant.defaultCountry || "CA"}`];
+  return ["Canada"];
+}
 
-  const locQuery = campaign.locationQuery || "Montréal, QC";
-  const targetCount = campaign.targetCount || 50;
+// ─── Construction des requêtes de recherche ───────────────────────────────────
+function buildSearchQueries(tenant: any, campaign: any, geographies: string[]): string[] {
+  const queries: string[] = [];
 
-  // ── Secteurs canoniques vs secteurs libres ──────────────────────────────
-  const CANON_SECTORS = new Set(Object.keys(SECTOR_SYNONYMS));
-  const requiredSectorsRaw = campaign.industrySectors || [];
-  const requiredSectors = requiredSectorsRaw.filter(s => CANON_SECTORS.has(s));
-  const freeSectorTerms = requiredSectorsRaw.filter(s => !CANON_SECTORS.has(s));
-  const campaignKeywords = [...(campaign.keywords || []), ...freeSectorTerms];
-  const campaignKwNorm = campaignKeywords.map(normText).filter(Boolean);
-  const locNorm = normText(locQuery);
-  const isMTL = isGmQuery(locQuery);
-  const wantQC = isMTL || /\b(qc|qu[eé]bec)\b/.test(locNorm);
-  let targetProvince = wantQC ? "QC" : null;
-  if (!targetProvince) {
-    for (const [prov, aliases] of Object.entries(PROVINCE_ALIASES)) {
-      if (aliases.some(a => locNorm.includes(a))) { targetProvince = prov; break; }
+  // Mots-clés : priorité à la campagne, puis tenant, puis vide
+  const baseKeywords: string[] = [
+    ...(campaign?.keywords || []),
+    ...(tenant.searchKeywords || []),
+  ];
+  const sectors: string[] = campaign?.industrySectors || [];
+  const excluded: string[] = [
+    ...(tenant.excludedKeywords || []),
+    ...(campaign?.extraExcludedDomains || []),
+  ];
+
+  const exclusionStr = excluded.length > 0
+    ? ` -${excluded.slice(0, 3).join(" -")}`
+    : "";
+
+  for (const geo of geographies.slice(0, 3)) {
+    if (sectors.length > 0) {
+      for (const sector of sectors.slice(0, 4)) {
+        if (baseKeywords.length > 0) {
+          queries.push(`${sector} ${baseKeywords.slice(0,2).join(" ")} ${geo}${exclusionStr}`);
+        } else {
+          queries.push(`${sector} entreprises ${geo}${exclusionStr}`);
+        }
+      }
+    } else if (baseKeywords.length > 0) {
+      queries.push(`${baseKeywords.slice(0,3).join(" ")} ${geo}${exclusionStr}`);
+    } else {
+      // Fallback générique — utiliser le profil ICP si disponible
+      const profileHint = tenant.industryProfile
+        ? tenant.industryProfile.split(" ").slice(0, 4).join(" ")
+        : "entreprises";
+      queries.push(`${profileHint} ${geo}`);
     }
   }
 
-  const existingProspects = await base44.entities.Prospect.filter({ campaignId }, "-created_date", 2000).catch(() => []);
-  const existingDomains = new Set(existingProspects.map(p => (p.domain || "").toLowerCase()));
-  // Brand-family dedup: track fingerprints and retail group IDs already inserted
-  const seenBrandFingerprints = new Set(existingProspects.map(p => brandFingerprint(p.companyName)).filter(Boolean));
-  const seenRetailGroupIds = new Set(); // retail corporate-family dedup
-  // Pre-populate seenRetailGroupIds from existing prospects
-  for (const p of existingProspects) {
-    const fp = brandFingerprint(p.companyName);
-    for (const [token, gIdx] of RETAIL_GROUP_MAP.entries()) {
-      if (fp.includes(token)) { seenRetailGroupIds.add(gIdx); break; }
+  return queries.slice(0, 10);
+}
+
+// ─── Scoring configurable ─────────────────────────────────────────────────────
+function scoreProspect(prospect: any, tenant: any, campaign: any): number {
+  const scoringMode = tenant.scoringMode || "RULES";
+  const weights = tenant.scoringWeights || {};
+
+  if (scoringMode === "AI") {
+    // En mode AI, on retourne un score neutre — l'IA calculera plus tard via analyzeProspect
+    return 50;
+  }
+
+  // Mode RULES — scoring paramétrable
+  let score = 0;
+
+  // Poids configurables avec fallbacks
+  const wGeo = weights.geo ?? 30;
+  const wSector = weights.sector ?? 25;
+  const wKeyword = weights.keyword ?? 20;
+  const wDomain = weights.domain ?? 15;
+  const wEventFit = weights.eventFit ?? 10;
+
+  const sectors = campaign?.industrySectors || [];
+  const keywords = [
+    ...(campaign?.keywords || []),
+    ...(tenant.searchKeywords || []),
+  ];
+  const geographies = resolveGeographies(tenant, campaign);
+
+  // Géographie
+  const locationStr = JSON.stringify(prospect.location || {}).toLowerCase();
+  const geoMatch = geographies.some(g => locationStr.includes(g.toLowerCase().split(",")[0].trim().toLowerCase()));
+  if (geoMatch) score += wGeo;
+
+  // Secteur
+  const prospectSectors = (prospect.industrySectors || []).map((s: string) => s.toLowerCase());
+  const sectorMatch = sectors.some(s => prospectSectors.includes(s.toLowerCase()));
+  if (sectorMatch) score += wSector;
+
+  // Mots-clés
+  const companyStr = `${prospect.companyName || ""} ${prospect.serpSnippet || ""}`.toLowerCase();
+  const kwMatch = keywords.some(k => companyStr.includes(k.toLowerCase()));
+  if (kwMatch) score += wKeyword;
+
+  // Domaine valide
+  if (prospect.domain && !prospect.domain.includes("linkedin") && !prospect.domain.includes("facebook")) {
+    score += wDomain;
+  }
+
+  // eventFit (conservé pour rétrocompatibilité)
+  const eventFit = prospect.eventFitScore || 0;
+  score += Math.round((eventFit / 100) * wEventFit);
+
+  return Math.min(100, Math.max(0, score));
+}
+
+// ─── Recherche Brave ──────────────────────────────────────────────────────────
+async function searchBrave(query: string, apiKey: string, maxResults = 5): Promise<any[]> {
+  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}&country=CA`;
+  const res = await fetch(url, {
+    headers: {
+      "Accept": "application/json",
+      "Accept-Encoding": "gzip",
+      "X-Subscription-Token": apiKey,
+    },
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.web?.results || [];
+}
+
+// ─── Extraction domaine ───────────────────────────────────────────────────────
+function extractDomain(url: string): string {
+  try {
+    const u = new URL(url.startsWith("http") ? url : `https://${url}`);
+    return u.hostname.replace(/^www\./, "");
+  } catch (_) { return ""; }
+}
+
+// ─── Normalisation prospect ───────────────────────────────────────────────────
+function normalizeProspect(result: any, campaignId: string, tenantId: string): any {
+  const domain = extractDomain(result.url || "");
+  return {
+    campaignId,
+    tenantId: tenantId || "sync-default",
+    companyName: result.title?.split(" - ")[0]?.split(" | ")[0]?.trim() || result.title || domain,
+    website: result.url || `https://${domain}`,
+    domain,
+    serpSnippet: result.description || "",
+    sourceUrl: result.url || "",
+    status: "NOUVEAU",
+    sourceOrigin: "WEB",
+    location: {},
+    relevanceScore: 0,
+  };
+}
+
+// ─── Déduplication ────────────────────────────────────────────────────────────
+function deduplicateByDomain(prospects: any[]): any[] {
+  const seen = new Set<string>();
+  return prospects.filter(p => {
+    if (!p.domain || seen.has(p.domain)) return false;
+    seen.add(p.domain);
+    return true;
+  });
+}
+
+// ─── Filtre exclusions ────────────────────────────────────────────────────────
+async function loadExcludedDomains(base44: any, tenantId: string, campaignId: string): Promise<Set<string>> {
+  const excluded = new Set<string>();
+  try {
+    // Exclusions globales du tenant
+    const globalExclusions = await base44.asServiceRole.entities.ExclusionEntry.filter(
+      { exclusionType: "GLOBAL", isActive: true }, "-created_date", 500
+    );
+    for (const e of globalExclusions) {
+      if (e.domain) excluded.add(e.domain.toLowerCase());
     }
-  }
-  let prospectCount = existingProspects.length;
+    // Exclusions spécifiques à la campagne
+    const campExclusions = await base44.asServiceRole.entities.ExclusionEntry.filter(
+      { campaignId, isActive: true }, "-created_date", 200
+    );
+    for (const e of campExclusions) {
+      if (e.domain) excluded.add(e.domain.toLowerCase());
+    }
+  } catch (_) { /* non-blocking */ }
+  return excluded;
+}
 
-  console.log(`[START] campaignId=${campaignId} target=${targetCount} existing=${prospectCount} isMTL=${isMTL} sectors=${requiredSectors.join(",")} freeSectorTerms=${freeSectorTerms.join(",")} keywords=${campaignKeywords.join(",")}`);
-
-  if (prospectCount >= targetCount) {
-    await base44.entities.Campaign.update(campaignId, { status: "COMPLETED", progressPct: 100, countProspects: prospectCount });
-    return Response.json({ success: true, campaignId, prospectCount, status: "COMPLETED", skipReason: "ALREADY_AT_TARGET" });
-  }
-
-  let kbAccepted = 0, webAccepted = 0, webTopUpInserted = 0, braveRequests = 0;
-  let stopReason = null;
-  const retryStats = { createRetryCount: 0, rateLimitHitCount: 0, rateLimitExhausted: false, totalWaitMs: 0 };
-
-  // ── Instrumentation counters ──────────────────────────────────────────────
-  let matchByIndustrySectorsCount = 0, matchByThemesCount = 0, matchByPrimaryThemeCount = 0, matchByIndustryLabelCount = 0;
-  let kbMatchedByPrimarySector = 0, kbMatchedByDerivedSector = 0;
-  let strictCount = 0, expandedCount = 0, rejectedCount = 0;
-  let kbAfterMissingFields = 0;
-  let webRejectedBlockedDomain = 0, webRejectedBlockedPathOrTitle = 0, webRejectedNoSectorMatch = 0, webRejectedInvalidName = 0;
-  const topRejectReasons = {};
-  const derivedReasonsCounts = {};
-  const sampleMatched = [];
-  const rejectedSamples = [];
+// ─── KB top-up ────────────────────────────────────────────────────────────────
+async function kbTopUp(base44: any, campaign: any, tenant: any, existingDomains: Set<string>, target: number): Promise<any[]> {
+  const sectors = campaign?.industrySectors || [];
+  if (sectors.length === 0) return [];
 
   try {
-    // ══════════════════════════════════════════════════════════════════════
-    // PHASE 1 — KBEntityV3 (filtered query instead of full load)
-    // ══════════════════════════════════════════════════════════════════════
+    const kbEntities = await base44.asServiceRole.entities.KBEntityV3.filter(
+      { kbTier: "VERIFIED", isExcluded: false }, "-confidenceScore", 500
+    );
 
-    // Resolve geo scopes first
-    function resolveRequiredGeoScopes() {
-      const locKey = (campaign.locationKey || "").toUpperCase();
-      if (locKey === "MONTREAL") return ["MTL_CMM"];
-      if (locKey === "QUEBEC_CITY" || locKey === "QUEBEC") return ["MTL_CMM", "QC_OTHER"];
-      if (locKey === "CANADA") return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
-      if (isMTL) return ["MTL_CMM", "QC_OTHER"];
-      if (/\b(qc|qu[eé]bec)\b/.test(normText(locQuery))) return ["MTL_CMM", "QC_OTHER"];
-      return ["MTL_CMM", "QC_OTHER", "CANADA_OTHER"];
+    const prospects: any[] = [];
+    for (const entity of kbEntities) {
+      if (prospects.length >= target) break;
+      if (!entity.domain || existingDomains.has(entity.domain)) continue;
+      if (entity.isExcluded) continue;
+
+      const entitySectors = entity.industrySectors || [];
+      const sectorMatch = sectors.length === 0 || sectors.some(s =>
+        entitySectors.some((es: string) => es.toLowerCase().includes(s.toLowerCase()))
+      );
+      if (!sectorMatch) continue;
+
+      prospects.push({
+        campaignId: campaign.id,
+        tenantId: tenant.tenantId || "sync-default",
+        companyName: entity.name,
+        website: entity.website || `https://${entity.domain}`,
+        domain: entity.domain,
+        status: "NOUVEAU",
+        sourceOrigin: "KB_TOPUP",
+        kbEntityId: entity.id,
+        kbTier: entity.kbTier || "VERIFIED",
+        location: { city: entity.hqCity, province: entity.hqProvince, country: entity.hqCountry },
+        relevanceScore: 0,
+      });
     }
-    const requiredGeoScopes = resolveRequiredGeoScopes();
+    return prospects;
+  } catch (_) { return []; }
+}
 
-    // Build a targeted filter query for KB
-    const kbFilterQuery = {};
-    // Filter by geoScope if possible
-    if (requiredGeoScopes.length < 4) {
-      kbFilterQuery.geoScope = { $in: requiredGeoScopes };
-    }
-    // Filter by industrySectors if campaign has sector requirements
-    if (requiredSectors.length > 0) {
-      // Use $in to match any KB entity whose industrySectors array contains at least one required sector
-      kbFilterQuery.industrySectors = { $in: requiredSectors };
-    }
+// ─── Main handler ─────────────────────────────────────────────────────────────
+Deno.serve(async (req) => {
+  try {
+    const base44 = createClientFromRequest(req);
+    const user = await base44.auth.me();
+    if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-    // Filter by kbTier if campaign specifies a minimum tier
-    const kbTierFilter = campaign.kbTierFilter || "ALL";
-    if (kbTierFilter === "VERIFIED_ONLY") {
-      kbFilterQuery.kbTier = "VERIFIED";
-    } else if (kbTierFilter === "PROBABLE_AND_ABOVE") {
-      kbFilterQuery.kbTier = { $in: ["VERIFIED", "PROBABLE"] };
-    }
-    // "ALL" → no filter applied
+    const payload = await req.json();
+    const { campaignId } = payload;
+    if (!campaignId) return Response.json({ error: "campaignId requis" }, { status: 400 });
 
-    let kbAll = [];
-    let page = 0;
-    while (Date.now() - START < MAX_MS * 0.7) {
-      const batch = await base44.asServiceRole.entities.KBEntityV3.filter(kbFilterQuery, '-confidenceScore', 500, page * 500).catch(() => []);
-      if (!batch || batch.length === 0) break;
-      kbAll = kbAll.concat(batch);
-      if (batch.length < 500) break;
-      page++;
-      if (page >= 20) break;
-    }
+    // Charger la campagne
+    const campaigns = await base44.asServiceRole.entities.Campaign.filter({ id: campaignId }, "-created_date", 1);
+    if (!campaigns?.length) return Response.json({ error: "Campagne introuvable" }, { status: 404 });
+    const campaign = campaigns[0];
 
-    // If no sector filter was applied, also try entities without geoScope set (UNKNOWN)
-    if (requiredGeoScopes.length < 4) {
-      const fallbackQuery = { ...kbFilterQuery, geoScope: "UNKNOWN" };
-      let fbPage = 0;
-      const existingIds = new Set(kbAll.map(e => e.id));
-      while (Date.now() - START < MAX_MS * 0.7) {
-        const batch = await base44.asServiceRole.entities.KBEntityV3.filter(fallbackQuery, '-confidenceScore', 500, fbPage * 500).catch(() => []);
-        if (!batch || batch.length === 0) break;
-        for (const e of batch) {
-          if (!existingIds.has(e.id)) { kbAll.push(e); existingIds.add(e.id); }
-        }
-        if (batch.length < 500) break;
-        fbPage++;
-        if (fbPage >= 5) break;
-      }
+    // Résolution du tenant
+    const tenant = await resolveTenant(base44, payload, campaign);
+
+    // AppSettings (coûts API, limites)
+    let appSettings: any = {};
+    try {
+      const s = await base44.asServiceRole.entities.AppSettings.filter({ settingsId: "global" }, "-created_date", 1);
+      if (s?.length) appSettings = s[0];
+    } catch (_) { /* non-blocking */ }
+
+    const BRAVE_KEY = Deno.env.get("BRAVE_API_KEY");
+    if (!BRAVE_KEY) {
+      await base44.asServiceRole.entities.Campaign.update(campaignId, { status: "FAILED", errorMessage: "BRAVE_API_KEY manquante" });
+      return Response.json({ error: "BRAVE_API_KEY manquante" }, { status: 500 });
     }
 
-    const kbDomainSet = new Set(kbAll.map(e => (e.domain || "").toLowerCase()));
-    console.log(`[KB] loaded=${kbAll.length} (filtered query, geoScopes=${requiredGeoScopes.join(",")}, sectors=${requiredSectors.join(",")})`);
+    // Seuil de score depuis tenant ou campagne
+    const fitThreshold = campaign.eventFitMinScore || tenant.fitThresholdDefault || 0;
 
-    // Post-filter: validate required fields + fine-grained geo (hqRegion/hqProvince fallback for UNKNOWN geoScope)
-    const kbRegionFiltered = kbAll.filter(e => {
-      if (!e.domain || !e.website || !e.name) return false;
-      kbAfterMissingFields++;
-      // If geoScope was set and matched the query, it's already valid
-      if (e.geoScope && e.geoScope !== "UNKNOWN") return true;
-      // For UNKNOWN geoScope entries, apply legacy heuristic
-      if (isMTL) return ["MTL","GM"].includes(e.hqRegion);
-      if (targetProvince) return e.hqProvince === targetProvince || ["MTL","GM","QC_OTHER"].includes(e.hqRegion);
-      return true;
+    // Mettre à jour le statut
+    await base44.asServiceRole.entities.Campaign.update(campaignId, {
+      status: "RUNNING",
+      progressPct: 5,
+      lastRunAt: new Date().toISOString(),
+      errorMessage: null,
     });
-    console.log(`[KB] afterRegion=${kbRegionFiltered.length}`);
 
-    // Sector filter + score every entity
-    // Categorize into STRICT / EXPANDED / REJECTED
-    const kbStrict = [];
-    const kbExpanded = [];
+    const target = campaign.targetCount || 50;
+    const geographies = resolveGeographies(tenant, campaign);
+    const queries = buildSearchQueries(tenant, campaign, geographies);
 
-    for (const e of kbRegionFiltered) {
-      if (requiredSectors.length === 0) {
-        // No sector filter → score 60 EXPANDED for everyone
-        kbExpanded.push({ kb: e, sectorScore: 60, tier: "EXPANDED", reasons: ["noFilter"], whichMode: null });
-        continue;
-      }
+    // Charger les exclusions
+    const excludedDomains = await loadExcludedDomains(base44, tenant.tenantId, campaignId);
 
-      const { matchedCanonical, whichMode } = fuzzyMatchSectors(e, requiredSectors);
-      if (!whichMode) continue; // doesn't match at all
+    // Domaines déjà dans cette campagne
+    const existingProspects = await base44.asServiceRole.entities.Prospect.filter(
+      { campaignId }, "-created_date", 500
+    );
+    const existingDomains = new Set<string>(existingProspects.map((p: any) => p.domain).filter(Boolean));
 
-      // Track match mode & derived sector stats
-      if (whichMode === "industrySectors") matchByIndustrySectorsCount++;
-      else if (whichMode === "themes") matchByThemesCount++;
-      else if (whichMode === "primaryTheme") matchByPrimaryThemeCount++;
-      else if (whichMode === "industryLabel") matchByIndustryLabelCount++;
-      
-      // Track primary vs derived matches
-      if (whichMode === "PRIMARY_SECTOR") kbMatchedByPrimarySector++;
-      else if (whichMode === "DERIVED_SECTOR") kbMatchedByDerivedSector++;
+    let allProspects: any[] = [];
+    const maxBraveRequests = appSettings.braveMaxRequestsPerCampaign || 200;
+    let braveRequestCount = 0;
 
-      // Compute sector score for the first matched sector
-      const targetSector = matchedCanonical[0] || requiredSectors[0];
-      const { score, tier, reasons, rejectReason } = computeSectorScore(e, targetSector);
+    // ─── Résolution du mode source ────────────────────────────────────────────
+    // Rétrocompatibilité: si kbOnlyMode=true et sourceMode absent → KB_ONLY
+    const sourceMode = campaign.sourceMode || (campaign.kbOnlyMode ? "KB_ONLY" : "WEB_ENRICHED");
 
-      // Hard-block sectors (e.g. retail): reject entities that match exclusions
-      if (tier === "REJECTED") {
-        rejectedCount++;
-        if (rejectedSamples.length < 5) rejectedSamples.push({ name: e.name, domain: e.domain, rejectReason });
-        continue;
-      }
-
-      const entry = { kb: e, matchedCanonical, whichMode, sectorScore: score, tier, reasons };
-      strictCount++;
-      kbStrict.push(entry);
+    if (sourceMode === "AGENT") {
+      // Mode Agent autonome: on enregistre le brief et on complète immédiatement
+      // L'exécution réelle est déléguée à un agent (traitement asynchrone futur)
+      await base44.asServiceRole.entities.Campaign.update(campaignId, {
+        status: "COMPLETED",
+        progressPct: 100,
+        lastRunDebugSummary: `sourceMode=AGENT brief="${(campaign.agentBrief || "").slice(0, 80)}"`,
+        toolUsage: { sourceMode: "AGENT", agentBriefLength: (campaign.agentBrief || "").length },
+      });
+      return Response.json({ sourceMode: "AGENT", status: "COMPLETED" });
     }
 
-    console.log(`[KB] afterSector=${kbStrict.length + kbExpanded.length} (strict=${strictCount} expanded=${expandedCount})`);
-
-    // ── Ranking (tri uniquement, pas de cutoff) ──────────────────────────────
-    const normRequired = requiredSectors.map(normSector);
-    function rankScore(e, sectorScore) {
-      let score = sectorScore * 10; // base from sector score
-
-      // Exact primaryTheme match → major boost
-      if (normRequired.includes(normSector(e.primaryTheme))) score += 1000;
-
-      // Theme confidence
-      let tcRaw2 = typeof e.themeConfidence === "number" ? e.themeConfidence : (parseFloat(e.themeConfidence) || 55);
-      const tcNorm = tcRaw2 > 1 ? tcRaw2 / 100 : tcRaw2;
-      score += tcNorm * 100;
-
-      // ── Event signals: core ICP signal for SYNC — heavily weighted ────────
-      const eventSigs = parseArr(e.eventFitSignals);
-      if (eventSigs.length >= 3) score += 800;       // strong: org clearly runs events
-      else if (eventSigs.length >= 1) score += 400;  // moderate: some event signal
-
-      // KB keywords that overlap with event-intent vocabulary
-      const kbKeywords = parseArr(e.keywords).map(normText);
-      const eventKwHits = EVENT_SIGNAL_TERMS_NORM.filter(t => kbKeywords.some(kw => kw.includes(t))).length;
-      if (eventKwHits >= 2) score += 500;
-      else if (eventKwHits === 1) score += 200;
-
-      // Notes/tags mention event terms
-      const notesNorm = normText([e.notes, ...parseArr(e.tags)].filter(Boolean).join(" "));
-      const eventNotesHits = EVENT_SIGNAL_TERMS_NORM.filter(t => notesNorm.includes(t)).length;
-      if (eventNotesHits >= 2) score += 300;
-      else if (eventNotesHits === 1) score += 100;
-
-      // Campaign keyword match boost
-      if (campaignKwNorm.length > 0) {
-        const eBlob = normText([e.name, e.normalizedName, ...parseArr(e.keywords), e.notes, ...parseArr(e.tags)].filter(Boolean).join(" "));
-        const kwMatches = campaignKwNorm.filter(kw => eBlob.includes(kw)).length;
-        score += kwMatches * 200;
-      }
-
-      // ── Retail-specific ranking boosters ──────────────────────────────────
-      if (requiredSectors.includes("Commerce de détail")) {
-        const eBlob2 = normText([e.name, e.notes, ...parseArr(e.tags), ...parseArr(e.keywords)].filter(Boolean).join(" "));
-        // Recognizable retail brand signals — chains, franchise networks, national brands
-        if (/\b(chaine|franchise|magasin|boutique|supermarche|epicerie|detaillant|banner|enseigne)\b/.test(eBlob2)) score += 300;
-        // Multi-location / national scale signals
-        if (/\b(national|canadien|canada|pan-canadien|partout au canada|succursale|points de vente)\b/.test(eBlob2)) score += 200;
-        // Penalize thin entries with no notes/keywords (low data quality)
-        if (!e.notes && parseArr(e.keywords).length === 0) score -= 100;
-      }
-
-      // Confidence score (minor weight)
-      score += (e.confidenceScore || 70) * 0.2;
-      return score;
-    }
-
-    kbStrict.sort((a, b) => rankScore(b.kb, b.sectorScore) - rankScore(a.kb, a.sectorScore));
-    kbExpanded.sort((a, b) => rankScore(b.kb, b.sectorScore) - rankScore(a.kb, a.sectorScore));
-
-    // ── Insert: STRICT first, then EXPANDED ────────────────────────────────
-    const orderedKb = [...kbStrict, ...kbExpanded];
-
-    for (const { kb, matchedCanonical, tier, sectorScore, reasons } of orderedKb) {
-      if (prospectCount >= targetCount) { stopReason = "TARGET_REACHED"; break; }
-      // Active time = elapsed minus rate-limit wait time
-      const activeTimeMs = (Date.now() - START) - (retryStats.totalWaitMs || 0);
-      if (activeTimeMs > MAX_MS * 0.70) { stopReason = "TIME_BUDGET_KB"; break; }
-
-      const domNorm = (kb.domain || "").toLowerCase();
-      if (existingDomains.has(domNorm)) continue;
-
-      // Brand-family dedup: skip if we've already inserted a sibling from the same corporate group
-      const kbFp = brandFingerprint(kb.name);
-      if (seenBrandFingerprints.has(kbFp)) continue;
-      if (requiredSectors.includes("Commerce de détail")) {
-        // Also check retail group family dedup
-        let kbGroupId = null;
-        for (const [token, gIdx] of RETAIL_GROUP_MAP.entries()) {
-          if (kbFp.includes(token) || domNorm.includes(token)) { kbGroupId = gIdx; break; }
-        }
-        if (kbGroupId !== null && seenRetailGroupIds.has(kbGroupId)) continue;
-        if (kbGroupId !== null) seenRetailGroupIds.add(kbGroupId);
-      }
-
-      const displaySectors = (matchedCanonical && matchedCanonical.length > 0) ? matchedCanonical : requiredSectors.slice(0, 1);
-      const displayLabel = displaySectors[0] || kb.industryLabel || null;
-
-      // Sample for debug (first 5)
-      if (sampleMatched.length < 5) {
-        sampleMatched.push({
-          name: kb.name, domain: kb.domain,
-          primaryTheme: kb.primaryTheme || null,
-          industryLabel: kb.industryLabel || null,
-          industrySectors_raw: parseArr(kb.industrySectors).slice(0, 3),
-          themes_raw: parseArr(kb.themes).slice(0, 3),
-          whichModeMatched: matchedCanonical ? orderedKb.find(o => o.kb === kb)?.whichMode : null,
-          sectorScore,
-          tier,
-          reasons,
-          displayLabel,
-        });
-      }
-
-      try {
-        await createProspectFromKb(base44, campaignId, campaign, kb, displaySectors, displayLabel, tier, sectorScore, retryStats);
-      } catch (err) {
-        if (retryStats.rateLimitExhausted) { stopReason = "RATE_LIMIT_CHECKPOINT"; break; }
-        throw err;
-      }
-
-      existingDomains.add(domNorm);
-      seenBrandFingerprints.add(kbFp);
-      kbAccepted++;
-      prospectCount++;
-
-      if (kbAccepted % 5 === 0) {
-        await base44.entities.Campaign.update(campaignId, {
-          progressPct: Math.min(40, Math.round((kbAccepted / targetCount) * 40)),
-          countProspects: prospectCount,
-        });
-      }
-    }
-    console.log(`[KB] END kbAccepted=${kbAccepted} total=${prospectCount} kbOnlyMode=${kbOnlyMode}`);
-
-    // ══════════════════════════════════════════════════════════════════════
-    // PHASE 2 — Brave Search (parallelized by batches of 3)
-    // KB-First: skip web search if KB already filled target or kbOnlyMode
-    // ══════════════════════════════════════════════════════════════════════
-    if (kbOnlyMode) {
-      stopReason = stopReason || "KB_ONLY_MODE";
-      console.log(`[BRAVE] SKIPPED — kbOnlyMode=true`);
-    } else if (prospectCount < targetCount && !stopReason) {
-      const queries = buildQueries(requiredSectors, locQuery, campaignKeywords);
-      const MAX_BRAVE = 250;
-      const BRAVE_BATCH_SIZE = 3;
-
-      let queryIdx = 0;
-      while (queryIdx < queries.length) {
-        if (prospectCount >= targetCount) { stopReason = "TARGET_REACHED"; break; }
-        if (braveRequests >= MAX_BRAVE || braveRL.quotaExceeded) break;
-        const activeTimeBrave = (Date.now() - START) - (retryStats.totalWaitMs || 0);
-        if (activeTimeBrave > MAX_MS * 0.85) { stopReason = "TIME_BUDGET"; break; }
-
-        // Build batch
-        const batchQueries = [];
-        while (batchQueries.length < BRAVE_BATCH_SIZE && queryIdx < queries.length) {
-          if (braveRequests + batchQueries.length >= MAX_BRAVE) break;
-          batchQueries.push(queries[queryIdx]);
-          queryIdx++;
-        }
-        if (batchQueries.length === 0) break;
-
-        // Fire all queries in parallel
-        const batchResults = await Promise.all(
-          batchQueries.map(q => braveSearch(q, 20))
-        );
-        braveRequests += batchQueries.length;
-
-        // Log each Brave request
-        for (const br of batchResults) {
-          logApiUsage("Brave Search", br.rateLimited ? "RATE_LIMITED" : "SUCCESS");
-        }
-
-        // Process results sequentially to maintain dedup state
-        for (const { results, rateLimited } of batchResults) {
-          if (rateLimited && braveRL.quotaExceeded) { console.log("[BRAVE] quota exceeded"); break; }
-          if (prospectCount >= targetCount) break;
-
-          for (const r of results) {
-            if (prospectCount >= targetCount) break;
-            const norm = normalizeWebResult(r, requiredSectors, isMTL);
-            if (!norm.accepted) {
-              if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
-              else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
-              else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
-              else if (norm.rejectReason === "invalidCompanyName") webRejectedInvalidName++;
-              continue;
-            }
-            const domNorm = norm.domain.toLowerCase();
-            if (existingDomains.has(domNorm)) continue;
-
-            // Brand-family dedup for web results
-            const webFp = brandFingerprint(norm.companyName);
-            if (seenBrandFingerprints.has(webFp)) continue;
-            if (requiredSectors.includes("Commerce de détail")) {
-              let webGroupId = null;
-              for (const [token, gIdx] of RETAIL_GROUP_MAP.entries()) {
-                if (webFp.includes(token) || domNorm.includes(token)) { webGroupId = gIdx; break; }
-              }
-              if (webGroupId !== null && seenRetailGroupIds.has(webGroupId)) continue;
-              if (webGroupId !== null) seenRetailGroupIds.add(webGroupId);
-            }
-
-            let kbEntityId = null;
-            if (!kbDomainSet.has(domNorm) && norm.score >= 80 && norm.eventHits >= 1) {
-              try {
-                const todayStr = new Date().toISOString().split("T")[0];
-                const created = await base44.asServiceRole.entities.KBEntityV3.create({
-                  name: norm.companyName,
-                  normalizedName: normText(norm.companyName),
-                  domain: domNorm,
-                  website: norm.website,
-                  hqCity: isMTL ? "Montréal" : "",
-                  hqProvince: "QC",
-                  hqCountry: "CA",
-                  hqRegion: isMTL ? "MTL" : "QC_OTHER",
-                  geoScope: isMTL ? "MTL_CMM" : "QC_OTHER",
-                  industryLabel: norm.bestSector || requiredSectors[0] || "",
-                  primaryTheme: norm.bestSector || requiredSectors[0] || "",
-                  industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
-                  themes: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
-                  entityType: "COMPANY",
-                  tags: [], notes: (norm.snippet || "").slice(0, 300),
-                  keywords: [], synonyms: [], sectorSynonymsUsed: [],
-                  confidenceScore: norm.score,
-                  qualityFlags: ["WEB_TOPUP"],
-                  sourceOrigin: "WEB",
-                  sourceUrl: norm.website,
-                  lastVerifiedAt: todayStr,
-                });
-                kbDomainSet.add(domNorm);
-                kbEntityId = created.id;
-                webTopUpInserted++;
-              } catch (_) {}
-            }
-
-            try {
-              await createProspectWithRetry(base44, {
-                campaignId,
-                ownerUserId: campaign.ownerUserId,
-                companyName: norm.companyName,
-                website: norm.website,
-                domain: domNorm,
-                industry: norm.bestSector || requiredSectors[0] || null,
-                industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
-                industryLabel: norm.bestSector || requiredSectors[0] || null,
-                location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
-                entityType: "COMPANY",
-                status: "NOUVEAU",
-                sourceOrigin: "WEB",
-                kbEntityId: kbEntityId || undefined,
-                serpSnippet: norm.snippet,
-                sourceUrl: norm.website,
-                relevanceScore: norm.score,
-                relevanceReasons: ["tier:WEB", `webScore:${norm.score}`, ...(norm.eventHits > 0 ? [`eventSignals:${norm.eventHits}`] : [])],
-              }, retryStats);
-            } catch (err) {
-              if (retryStats.rateLimitExhausted) { stopReason = "RATE_LIMIT_CHECKPOINT"; break; }
-              throw err;
-            }
-
-            existingDomains.add(domNorm);
-            seenBrandFingerprints.add(webFp);
-            webAccepted++;
-            prospectCount++;
-
-            // Progress update every 5 web prospects
-            if (webAccepted % 5 === 0) {
-              await base44.entities.Campaign.update(campaignId, {
-                progressPct: Math.min(90, 40 + Math.round((webAccepted / Math.max(targetCount - kbAccepted, 1)) * 50)),
-                countProspects: prospectCount,
-              });
-            }
-          }
-        }
-      }
-      console.log(`[BRAVE] END braveRequests=${braveRequests} webAccepted=${webAccepted}`);
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // PHASE 3 — SerpAPI fallback (skip if kbOnlyMode)
-    // ══════════════════════════════════════════════════════════════════════
-    if (!kbOnlyMode && prospectCount < targetCount && braveRL.quotaExceeded && SERP_KEY && !stopReason) {
-      console.log("[SERP] Starting SerpAPI fallback");
-      const serpQueries = buildQueries(requiredSectors, locQuery, campaignKeywords).slice(0, 5);
-      for (const query of serpQueries) {
-        if (prospectCount >= targetCount) break;
-        const activeTimeSerp = (Date.now() - START) - (retryStats.totalWaitMs || 0);
-        if (activeTimeSerp > MAX_MS * 0.95) break;
-        const results = await serpSearch(query);
-        logApiUsage("SerpAPI", results.length > 0 ? "SUCCESS" : "FAILED");
-        for (const r of results) {
-          if (prospectCount >= targetCount) break;
-          const norm = normalizeWebResult(r, requiredSectors, isMTL);
-          if (!norm.accepted) {
-            if (norm.rejectReason === "blockedDomain") webRejectedBlockedDomain++;
-            else if (norm.rejectReason === "blockedPathOrTitle") webRejectedBlockedPathOrTitle++;
-            else if (norm.rejectReason === "noSectorMatch") webRejectedNoSectorMatch++;
-            else if (norm.rejectReason === "invalidCompanyName") webRejectedInvalidName++;
-            continue;
-          }
-          const domNorm = norm.domain.toLowerCase();
-          if (existingDomains.has(domNorm)) continue;
-
-          // Brand-family dedup for SERP results
-          const serpFp = brandFingerprint(norm.companyName);
-          if (seenBrandFingerprints.has(serpFp)) continue;
-          if (requiredSectors.includes("Commerce de détail")) {
-            let serpGroupId = null;
-            for (const [token, gIdx] of RETAIL_GROUP_MAP.entries()) {
-              if (serpFp.includes(token) || domNorm.includes(token)) { serpGroupId = gIdx; break; }
-            }
-            if (serpGroupId !== null && seenRetailGroupIds.has(serpGroupId)) continue;
-            if (serpGroupId !== null) seenRetailGroupIds.add(serpGroupId);
-          }
-
-          try {
-            await createProspectWithRetry(base44, {
-              campaignId,
-              ownerUserId: campaign.ownerUserId,
-              companyName: norm.companyName,
-              website: norm.website,
-              domain: domNorm,
-              industry: norm.bestSector || requiredSectors[0] || null,
-              industrySectors: norm.bestSector ? [norm.bestSector] : requiredSectors.slice(0, 1),
-              industryLabel: norm.bestSector || requiredSectors[0] || null,
-              location: isMTL ? { city: "Montréal", country: "CA" } : { country: "CA" },
-              entityType: "COMPANY",
-              status: "NOUVEAU",
-              sourceOrigin: "WEB",
-              serpSnippet: norm.snippet,
-              sourceUrl: norm.website,
-              relevanceScore: norm.score,
-            }, retryStats);
-          } catch (err) {
-            if (retryStats.rateLimitExhausted) { stopReason = "RATE_LIMIT_CHECKPOINT"; break; }
-            throw err;
-          }
-
-          existingDomains.add(domNorm);
-          seenBrandFingerprints.add(serpFp);
-          webAccepted++;
-          prospectCount++;
-        }
-      }
-      console.log(`[SERP] END webAccepted total=${webAccepted}`);
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // FINALIZE
-    // ══════════════════════════════════════════════════════════════════════
-    const finalProspects = await base44.entities.Prospect.filter({ campaignId }).catch(() => []);
-    const finalProspectCount = finalProspects.length;
-
-    let finalStatus, errorMessage = null;
-    if (finalProspectCount >= targetCount) finalStatus = "COMPLETED";
-    else if (finalProspectCount > 0) {
-      finalStatus = "DONE_PARTIAL";
-      errorMessage = `${finalProspectCount}/${targetCount} prospects trouvés (STRICT=${strictCount}, EXPANDED=${expandedCount}, KB=${kbAccepted}, Brave=${webAccepted}). Relancez pour enrichir.`;
+    if (sourceMode === "KB_ONLY") {
+      // Mode Base existante: uniquement KB interne
+      const kbResults = await kbTopUp(base44, campaign, tenant, existingDomains, target);
+      allProspects = kbResults;
     } else {
-      finalStatus = "FAILED";
-      errorMessage = "Aucun prospect trouvé. Vérifiez vos critères.";
+      // Mode Recherche web enrichie (WEB_ENRICHED — par défaut)
+      for (const query of queries) {
+        if (allProspects.length >= target) break;
+        if (braveRequestCount >= maxBraveRequests) break;
+
+        const results = await searchBrave(query, BRAVE_KEY, appSettings.braveMaxPagesPerQuery || 5);
+        braveRequestCount++;
+
+        for (const result of results) {
+          if (allProspects.length >= target * 1.5) break;
+          const prospect = normalizeProspect(result, campaignId, tenant.tenantId);
+          if (!prospect.domain) continue;
+          if (excludedDomains.has(prospect.domain)) continue;
+          if (existingDomains.has(prospect.domain)) continue;
+          const excludedKws = tenant.excludedKeywords || [];
+          const snippetLower = (prospect.serpSnippet + " " + prospect.companyName).toLowerCase();
+          if (excludedKws.some((kw) => snippetLower.includes(kw.toLowerCase()))) continue;
+          allProspects.push(prospect);
+        }
+
+        await base44.asServiceRole.entities.Campaign.update(campaignId, {
+          progressPct: Math.min(80, Math.round((allProspects.length / target) * 80)),
+        });
+      }
+
+      // KB top-up si pas assez de résultats web
+      if (allProspects.length < target && (appSettings.enableKbTopUp !== false)) {
+        const kbNeeded = target - allProspects.length;
+        const allDomainsSoFar = new Set([
+          ...Array.from(existingDomains),
+          ...allProspects.map(p => p.domain).filter(Boolean),
+        ]);
+        const kbResults = await kbTopUp(base44, campaign, tenant, allDomainsSoFar, kbNeeded);
+        allProspects = [...allProspects, ...kbResults];
+      }
     }
 
-    const lastRunDebugSummary = `KB accepted ${kbAccepted}/${kbStrict.length + kbExpanded.length}; WEB accepted ${webAccepted}; rateLimitHitCount ${retryStats.rateLimitHitCount}; createRetryCount ${retryStats.createRetryCount}; stopReason ${stopReason || (finalProspects.length >= targetCount ? "TARGET_REACHED" : "PARTIAL")}`;
+    // Déduplication finale
+    allProspects = deduplicateByDomain(allProspects).slice(0, target);
 
-    const toolUsage = {
-      // ── KB pipeline ──
-      kbLoaded: kbAll.length,
-      kbAfterMissingFields,
-      kbAfterRegion: kbRegionFiltered.length,
-      kbAfterSector: kbStrict.length + kbExpanded.length,
-      kbAccepted,
-      // ── Web pipeline ──
-      webAccepted, webTopUpInserted,
-      webRejectedBlockedDomain, webRejectedBlockedPathOrTitle, webRejectedNoSectorMatch, webRejectedInvalidName,
-      braveRequests,
-      braveQuotaExceeded: braveRL.quotaExceeded,
-      brave429Count: braveRL.count429,
-      // ── Retry stats ──
-      createRetryCount: retryStats.createRetryCount,
-      rateLimitHitCount: retryStats.rateLimitHitCount,
-      // ── Totals ──
-      finalProspectCount,
-      selectedCount: kbAccepted + webAccepted,
-      // ── Sector matching detail ──
-      matchByIndustrySectorsCount, matchByThemesCount, matchByPrimaryThemeCount, matchByIndustryLabelCount,
-      kbMatchedByPrimarySector, kbMatchedByDerivedSector,
-      strictCount, expandedCount, rejectedCount,
-      // ── Canonical vs free sectors ──
-      requiredSectorsCanonical: requiredSectors,
-      freeSectorTerms,
-      campaignKeywordsUsed: campaignKeywords,
-      // ── Debug samples ──
-      topRejectReasons,
-      derivedReasonsCounts,
-      sampleMatched,
-      rejectedSamples,
-      stopReason: stopReason || (finalStatus === "COMPLETED" ? "TARGET_REACHED" : "PARTIAL"),
-      isMTL, targetProvince,
-      lastRunDebugSummary,
-    };
+    // Scoring
+    for (const p of allProspects) {
+      p.relevanceScore = scoreProspect(p, tenant, campaign);
+    }
 
-    console.log(`[FINAL] status=${finalStatus} strict=${strictCount} expanded=${expandedCount} rejected=${rejectedCount} total=${finalProspectCount}/${targetCount}`);
+    // Filtre seuil si configuré
+    const finalProspects = fitThreshold > 0
+      ? allProspects.filter(p => p.relevanceScore >= fitThreshold)
+      : allProspects;
 
-    await base44.entities.Campaign.update(campaignId, {
-      status: finalStatus, progressPct: 100,
-      countProspects: finalProspectCount,
-      countAnalyzed: finalProspects.filter(p => ["ANALYSÉ","QUALIFIÉ","REJETÉ","EXPORTÉ"].includes(p.status)).length,
-      countQualified: finalProspects.filter(p => p.status === "QUALIFIÉ").length,
-      countRejected: finalProspects.filter(p => p.status === "REJETÉ").length,
-      errorMessage, toolUsage,
-      lastRunDebugSummary,
-    });
+    // Insertion en base
+    let insertedCount = 0;
+    for (const prospect of finalProspects) {
+      try {
+        await base44.asServiceRole.entities.Prospect.create(prospect);
+        insertedCount++;
+      } catch (_) { /* skip duplicates */ }
+    }
 
-    await base44.entities.ActivityLog.create({
-      ownerUserId: campaign.ownerUserId,
-      actionType: "RUN_PROSPECT_SEARCH",
-      entityType: "Campaign",
-      entityId: campaignId,
-      payload: toolUsage,
-      status: finalStatus === "FAILED" ? "ERROR" : "SUCCESS",
-      errorMessage: finalStatus === "FAILED" ? errorMessage : null,
-    }).catch(() => {});
+    const finalStatus = insertedCount >= target ? "COMPLETED" : insertedCount > 0 ? "DONE_PARTIAL" : "COMPLETED";
 
-    return Response.json({ success: true, campaignId, prospectCount: finalProspectCount, kbAccepted, webAccepted, status: finalStatus, toolUsage });
-
-  } catch (error) {
-    const errorCode = error.name || "Error";
-    const errMsg = error.message || "Erreur inconnue";
-    const errStack = (error.stack || "").split('\n').slice(0, 5).join('\n');
-    console.error(`[ERROR] code=${errorCode} message=${errMsg}`);
-
-    const finalProspectsAfterError = await base44.entities.Prospect.filter({ campaignId }).catch(() => []);
-    const finalProspectCountAfterError = finalProspectsAfterError.length;
-    const errorStatus = finalProspectCountAfterError > 0 ? "DONE_PARTIAL" : "FAILED";
-    const finalErrorMessage = finalProspectCountAfterError > 0
-      ? `Partiel: ${finalProspectCountAfterError} prospects trouvés. Erreur: ${errMsg}` : errMsg;
-
-    await base44.entities.Campaign.update(campaignId, {
-      status: errorStatus, errorMessage: finalErrorMessage, progressPct: 100,
-      countProspects: finalProspectCountAfterError,
+    await base44.asServiceRole.entities.Campaign.update(campaignId, {
+      status: finalStatus,
+      progressPct: 100,
+      countProspects: (existingProspects.length || 0) + insertedCount,
       toolUsage: {
-        kbAccepted, webAccepted, strictCount, expandedCount, rejectedCount,
-        matchByIndustrySectorsCount, matchByThemesCount, matchByPrimaryThemeCount, matchByIndustryLabelCount,
-        topRejectReasons, sampleMatched,
-        createRetryCount: retryStats.createRetryCount,
-        rateLimitHitCount: retryStats.rateLimitHitCount,
-        finalProspectCount: finalProspectCountAfterError,
-        stopReason: "EXCEPTION",
-        errorDetails: { errorCode, message: errMsg, stack: errStack },
+        sourceMode,
+        braveRequests: braveRequestCount,
+        prospectsInserted: insertedCount,
+        geographies,
+        tenantId: tenant.tenantId,
+        scoringMode: tenant.scoringMode || "RULES",
+        suggestedNextStep: insertedCount < target ? "RELAX_FILTERS" : null,
       },
-    }).catch(() => {});
+      lastRunDebugSummary: `sourceMode=${sourceMode} tenant=${tenant.tenantId} geo=${geographies[0]} queries=${queries.length} brave=${braveRequestCount} inserted=${insertedCount}/${target} scoring=${tenant.scoringMode || "RULES"}`,
+    });
 
     return Response.json({
-      error: finalErrorMessage, status: errorStatus,
-      kbAccepted, prospectCount: finalProspectCountAfterError,
-      errorDetails: { errorCode, message: errMsg },
-    }, { status: 500 });
+      inserted: insertedCount,
+      total: finalProspects.length,
+      geographies,
+      tenantId: tenant.tenantId,
+      queries: queries.length,
+    });
+  } catch (error: any) {
+    try {
+      const base44 = createClientFromRequest(req);
+      const payload = await req.clone().json().catch(() => ({}));
+      if (payload.campaignId) {
+        await base44.asServiceRole.entities.Campaign.update(payload.campaignId, {
+          status: "FAILED",
+          errorMessage: error.message,
+        });
+      }
+    } catch (_) { /* ignore */ }
+    return Response.json({ error: error.message }, { status: 500 });
   }
 });
